@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ARDENT — Rencontres Nocturnes & Passions Sans Filtre</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,600;0,700;1,600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Ambient Background Glows -->
+  <div class="ambient-bg">
+    <div class="glow glow-1"></div>
+    <div class="glow glow-2"></div>
+    <div class="glow glow-3"></div>
+  </div>
+
+  <!-- 18+ Lounge Gate Modal -->
+  <div id="age-gate" class="modal-overlay active">
+    <div class="modal-card age-card">
+      <div class="brand-badge">🔥 EXCLUSIF 18+</div>
+      <h1 class="serif-title">ARDENT<span>.club</span></h1>
+      <p class="age-subtitle">
+        Le club privé des rencontres intenses, complices et décomplexées.
+        Des connexions électriques, ce soir ou pour toujours.
+      </p>
+      <div class="age-perks">
+        <div class="perk"><span>⚡</span> Profils vérifiés & actifs ce soir</div>
+        <div class="perk"><span>🎭</span> Mode Incognito & Salon Privé</div>
+        <div class="perk"><span>🔥</span> Matchs par affinités & désirs</div>
+      </div>
+      <div class="age-actions">
+        <button id="btn-enter-club" class="btn-primary btn-glow">
+          J'ai plus de 18 ans — Entrer dans le Club
+        </button>
+        <p class="age-disclaimer">
+          En entrant, vous certifiez être majeur(e) et acceptez notre charte de respect mutuel et de discrétion.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Match Celebration Overlay -->
+  <div id="match-overlay" class="modal-overlay">
+    <div class="modal-card match-card">
+      <div class="match-flames">🔥⚡🔥</div>
+      <h2 class="serif-title match-title">C'est un Coup de Chaud !</h2>
+      <p id="match-subtitle" class="match-subtitle">La température vient de monter avec <strong>Clara</strong>.</p>
+      <div class="match-avatars">
+        <img id="match-user-img" src="" alt="Vous" class="match-avatar" />
+        <div class="match-heart">🔥</div>
+        <img id="match-target-img" src="" alt="Match" class="match-avatar" />
+      </div>
+      <div class="match-actions">
+        <button id="btn-match-chat" class="btn-primary btn-glow">Ouvrir le Salon Privé 💬</button>
+        <button id="btn-match-keep" class="btn-ghost">Continuer à explorer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top Navigation Bar -->
+  <header class="topbar">
+    <div class="brand" id="brand-logo">
+      <span class="brand-icon">🔥</span>
+      <span class="brand-name">ARDENT</span>
+      <span class="live-pill"><span class="pulse-dot"></span> <span id="online-counter">248</span> en ligne</span>
+    </div>
+
+    <nav class="nav-tabs" aria-label="Navigation principale">
+      <button class="nav-tab active" data-view="swipe">
+        <span class="tab-icon">🔥</span>
+        <span>Découvrir</span>
+      </button>
+      <button class="nav-tab" data-view="radar">
+        <span class="tab-icon">🌙</span>
+        <span>Ce Soir</span>
+      </button>
+      <button class="nav-tab" data-view="likes">
+        <span class="tab-icon">💋</span>
+        <span>Tentations</span>
+        <span id="likes-badge" class="badge">4</span>
+      </button>
+      <button class="nav-tab" data-view="chat">
+        <span class="tab-icon">💬</span>
+        <span>Salon Privé</span>
+        <span id="chat-badge" class="badge">2</span>
+      </button>
+      <button class="nav-tab" data-view="profile">
+        <span class="tab-icon">🎭</span>
+        <span>Mon Profil</span>
+      </button>
+    </nav>
+
+    <div class="topbar-right">
+      <button id="btn-incognito" class="incognito-toggle" title="Activer/Désactiver le mode Incognito">
+        <span>🕶️</span> <span class="incog-label">Visible</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <main class="app-container">
+
+    <!-- VIEW 1: SWIPE / DÉCOUVRIR -->
+    <section id="view-swipe" class="view active">
+      <div class="swipe-layout">
+        <!-- Filters Sidebar -->
+        <aside class="filters-panel glass-card">
+          <div class="panel-header">
+            <h3>🌡️ Température & Filtres</h3>
+            <button id="btn-reset-deck" class="btn-link">Réinitialiser</button>
+          </div>
+
+          <div class="filter-group">
+            <label>Envie du moment</label>
+            <div class="vibe-chips" id="filter-vibes">
+              <button class="chip active" data-vibe="all">Toutes 🔥</button>
+              <button class="chip" data-vibe="Alchimie nocturne">Alchimie nocturne 🌙</button>
+              <button class="chip" data-vibe="Passion sans filtre">Passion sans filtre ⚡</button>
+              <button class="chip" data-vibe="Rendez-vous secret">Rendez-vous secret 🥂</button>
+              <button class="chip" data-vibe="Flirt & Tentation">Flirt & Tentation 💋</button>
+            </div>
+          </div>
+
+          <div class="filter-group">
+            <div class="filter-label-row">
+              <label for="distance-range">Distance max</label>
+              <span id="distance-val">35 km</span>
+            </div>
+            <input type="range" id="distance-range" min="2" max="100" value="35" />
+          </div>
+
+          <div class="filter-group">
+            <label class="checkbox-row">
+              <input type="checkbox" id="filter-online-only" />
+              <span>Uniquement disponible ce soir</span>
+            </label>
+          </div>
+
+          <div class="spicy-meter-box">
+            <div class="spicy-header">
+              <span>Indice d'Audace du Club</span>
+              <strong>94°C 🔥</strong>
+            </div>
+            <div class="spicy-bar"><div class="spicy-fill" style="width: 94%"></div></div>
+            <p class="spicy-tip">Pic d'activité en cours dans votre ville. Lancez un <em>Coup de Foudre</em> pour passer en tête de pile.</p>
+          </div>
+        </aside>
+
+        <!-- Center Card Deck -->
+        <div class="deck-area">
+          <div id="swipe-card-container" class="card-stack">
+            <!-- Populated dynamically by app.js -->
+          </div>
+
+          <!-- Swipe Controls -->
+          <div class="swipe-controls">
+            <button id="btn-pass" class="ctrl-btn ctrl-pass" title="Passer (Flèche Gauche)">
+              ✕
+            </button>
+            <button id="btn-crush" class="ctrl-btn ctrl-crush" title="Coup de Chaud Intense (Flèche Haut)">
+              ⚡
+            </button>
+            <button id="btn-like" class="ctrl-btn ctrl-like" title="Tenter (Flèche Droite)">
+              🔥
+            </button>
+          </div>
+        </div>
+
+        <!-- Profile Details & Icebreaker Sidebar -->
+        <aside id="active-profile-details" class="details-panel glass-card">
+          <!-- Populated dynamically by app.js -->
+        </aside>
+      </div>
+    </section>
+
+    <!-- VIEW 2: CE SOIR / RADAR NOCTURNE -->
+    <section id="view-radar" class="view">
+      <div class="section-header">
+        <div>
+          <h2 class="serif-title">Radar Nocturne 🌙</h2>
+          <p class="section-sub">Membres connectés près de vous prêts à faire monter la température ce soir.</p>
+        </div>
+        <div class="mood-selector">
+          <span>Votre mood :</span>
+          <select id="my-tonight-mood">
+            <option value="🥂 Verre en terrasse ou bar tamisé">🥂 Verre en bar tamisé</option>
+            <option value="🔥 Alchimie immédiate chez moi ou chez toi">🔥 Alchimie immédiate</option>
+            <option value="💬 Flirt vocal & jeux de séduction">💬 Flirt & séduction</option>
+            <option value="🌙 Virée nocturne improvisée">🌙 Virée nocturne</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="radar-grid" class="radar-grid">
+        <!-- Populated by app.js -->
+      </div>
+    </section>
+
+    <!-- VIEW 3: TENTATIONS (LIKES & MATCHS) -->
+    <section id="view-likes" class="view">
+      <div class="section-header">
+        <div>
+          <h2 class="serif-title">Vos Tentations & Coups de Chaud 💋</h2>
+          <p class="section-sub">Ils ont craqué pour votre profil ou vous avez matché ensemble.</p>
+        </div>
+      </div>
+      <div id="likes-grid" class="radar-grid">
+        <!-- Populated by app.js -->
+      </div>
+    </section>
+
+    <!-- VIEW 4: SALON PRIVÉ (CHAT) -->
+    <section id="view-chat" class="view">
+      <div class="chat-layout glass-card">
+        <aside class="chat-sidebar">
+          <div class="chat-sidebar-header">
+            <h3>Conversations Privées</h3>
+          </div>
+          <div id="chat-list" class="chat-list">
+            <!-- Populated by app.js -->
+          </div>
+        </aside>
+
+        <div class="chat-main">
+          <div id="chat-header" class="chat-header">
+            <!-- Populated by app.js -->
+          </div>
+
+          <div id="chat-messages" class="chat-messages">
+            <!-- Populated by app.js -->
+          </div>
+
+          <div class="chat-icebreakers">
+            <button class="ice-btn" data-ice="🎲 Action ou Vérité version sans filtre : tu choisis quoi ?">🎲 Action ou Vérité</button>
+            <button class="ice-btn" data-ice="🥂 Si on se retrouvait dans 30 minutes, tu m'emmènerais où ?">🥂 Dans 30 min...</button>
+            <button class="ice-btn" data-ice="🔥 Dis-moi ton fantasme ou ton kiff le plus assumé en 3 mots.">🔥 En 3 mots...</button>
+          </div>
+
+          <form id="chat-form" class="chat-input-bar">
+            <input
+              type="text"
+              id="chat-input"
+              placeholder="Écrivez un message audacieux..."
+              autocomplete="off"
+            />
+            <button type="submit" class="btn-primary">Envoyer 🔥</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 5: MON PROFIL -->
+    <section id="view-profile" class="view">
+      <div class="profile-editor-layout">
+        <div class="glass-card profile-preview-card">
+          <div class="preview-img-wrap">
+            <img id="my-profile-img" src="" alt="Mon profil" />
+            <span class="Spicy-badge" id="my-spicy-badge">🔥 Audace 95%</span>
+          </div>
+          <div class="preview-body">
+            <h3 id="preview-name-age">Alex, 28</h3>
+            <p id="preview-vibe" class="preview-vibe">⚡ Passion sans filtre</p>
+            <p id="preview-bio" class="preview-bio"></p>
+          </div>
+        </div>
+
+        <form id="profile-form" class="glass-card profile-form-card">
+          <h2 class="serif-title">Personnaliser Mon Profil</h2>
+          <p class="section-sub">Soignez votre aura pour attirer les profils les plus irrésistibles.</p>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="input-name">Prénom ou Pseudo</label>
+              <input type="text" id="input-name" required />
+            </div>
+            <div class="form-group">
+              <label for="input-age">Âge (18+)</label>
+              <input type="number" id="input-age" min="18" max="99" required />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="input-city">Ville / Quartier</label>
+              <input type="text" id="input-city" required />
+            </div>
+            <div class="form-group">
+              <label for="input-vibe">Intention principale</label>
+              <select id="input-vibe">
+                <option value="Passion sans filtre">⚡ Passion sans filtre</option>
+                <option value="Alchimie nocturne">🌙 Alchimie nocturne</option>
+                <option value="Rendez-vous secret">🥂 Rendez-vous secret</option>
+                <option value="Flirt & Tentation">💋 Flirt & Tentation</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="input-avatar">Photo de profil (URL ou galerie)</label>
+            <div class="avatar-presets" id="avatar-presets">
+              <!-- Populated by app.js -->
+            </div>
+            <input type="url" id="input-avatar" placeholder="https://..." />
+          </div>
+
+          <div class="form-group">
+            <label for="input-bio">Bio & Ce qui vous fait vibrer</label>
+            <textarea id="input-bio" rows="3"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="input-secret">Mon secret / Ce qui me fait craquer (affiché aux matchs)</label>
+            <input type="text" id="input-secret" />
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn-primary btn-glow">Enregistrer mon profil 🔥</button>
+            <span id="save-toast" class="save-toast">Profil mis à jour avec succès ✨</span>
+          </div>
+        </form>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Toast Notification -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
