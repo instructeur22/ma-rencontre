@@ -1,0 +1,31 @@
+{
+  "name": "akwaba-rencontres-ci",
+  "version": "1.0.0",
+  "description": "AKWABA — Application web & API-first (prête pour Flutter iOS/Android) de rencontres ivoirien innovant avec intégration GeniusPay",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --no-warnings server/index.js",
+    "dev": "node --no-warnings --watch server/index.js",
+    "seed": "node --no-warnings server/db/seed.js",
+    "test": "node --no-warnings --test tests/*.test.js"
+  },
+  "keywords": [
+    "dating",
+    "cote-d-ivoire",
+    "abidjan",
+    "flutter-ready",
+    "geniuspay",
+    "mobile-money",
+    "wave",
+    "orange-money"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "ws": "^8.18.1"
+  }
+}

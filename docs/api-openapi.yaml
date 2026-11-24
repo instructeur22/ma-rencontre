@@ -1,0 +1,347 @@
+openapi: 3.0.3
+info:
+  title: AKWABA API — Rencontres Côte d'Ivoire & Diaspora
+  version: 1.0.0
+  description: |
+    API REST v1 & WebSocket partagée entre l'application Web/PWA AKWABA et les futures applications mobiles Flutter (iOS & Android).
+    Intègre la gestion des paiements Mobile Money & Cartes via GeniusPay.
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Serveur de développement local
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+paths:
+  /health:
+    get:
+      summary: Vérifier l'état de l'API et le mode GeniusPay actif
+      responses:
+        '200':
+          description: Service opérationnel
+  /auth/register:
+    post:
+      summary: Créer un compte (18+) avec bonus de bienvenue et parrainage
+      responses:
+        '201':
+          description: Compte créé et JWT retourné
+  /auth/login:
+    post:
+      summary: Connexion par email et mot de passe
+      responses:
+        '200':
+          description: Authentification réussie
+  /auth/demo:
+    post:
+      summary: Accès démo instantané (Kouamé ou Aya)
+      responses:
+        '200':
+          description: JWT démo retourné
+  /auth/me:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Profil connecté, solde Cauris, abonnement et métadonnées (communes, quiz Vrai Babi)
+      responses:
+        '200':
+          description: Session courante
+  /auth/phone-verify:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Vérifier un numéro (+225 ou diaspora) et augmenter le score de confiance
+      responses:
+        '200':
+          description: Numéro vérifié
+  /profiles/discover:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Découvrir des profils triés par Boost + Alchimie Culturelle Vrai Babi
+      parameters:
+        - in: query
+          name: commune
+          schema:
+            type: string
+        - in: query
+          name: intention
+          schema:
+            type: string
+        - in: query
+          name: verifiedOnly
+          schema:
+            type: boolean
+        - in: query
+          name: diasporaOnly
+          schema:
+            type: boolean
+        - in: query
+          name: onlineOnly
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Liste des profils compatibles
+  /profiles/tonight:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Radar des membres disponibles ce soir
+      responses:
+        '200':
+          description: Liste des profils disponibles ce soir
+  /profiles/me:
+    put:
+      security:
+        - BearerAuth: []
+      summary: Mettre à jour son profil, ses tags et son quiz Vrai Babi
+      responses:
+        '200':
+          description: Profil mis à jour
+  /profiles/me/voice:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Enregistrer une note vocale de présentation (base64 audio)
+      responses:
+        '200':
+          description: Note vocale enregistrée
+  /profiles/me/passport:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Activer le Passeport Babi (retour au pays / autre ville)
+      responses:
+        '200':
+          description: Passeport Babi mis à jour
+  /profiles/me/incognito:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Activer ou désactiver le Mode Incognito
+      responses:
+        '200':
+          description: Statut incognito mis à jour
+  /profiles/me/boost:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Activer le Boost Tête d'affiche 24h (150 Cauris)
+      responses:
+        '200':
+          description: Boost activé
+  /swipes:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Enregistrer une action pass, like ou super_like et détecter un match mutuel
+      responses:
+        '200':
+          description: Action enregistrée
+  /swipes/rewind:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Revenir sur le dernier profil passé
+      responses:
+        '200':
+          description: Profil restauré
+  /matches:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Lister les matchs mutuels
+      responses:
+        '200':
+          description: Liste des matchs
+  /likes/received:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Lister les admirateurs (floutés si compte gratuit non révélé)
+      responses:
+        '200':
+          description: Liste des admirateurs
+  /likes/{userId}/reveal:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Débloquer l'identité d'un admirateur (120 Cauris)
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Admirateur révélé
+  /chats/{matchId}/messages:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Récupérer l'historique d'une conversation
+      parameters:
+        - in: path
+          name: matchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Liste des messages
+    post:
+      security:
+        - BearerAuth: []
+      summary: Envoyer un message texte avec inspection Bouclier Babi
+      parameters:
+        - in: path
+          name: matchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Message envoyé
+  /chats/direct:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Envoyer un DM direct avant match (100 Cauris, réponse gratuite)
+      responses:
+        '201':
+          description: Conversation ouverte et DM envoyé
+  /chats/{matchId}/voice:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Envoyer une note vocale dans une conversation
+      parameters:
+        - in: path
+          name: matchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Vocal envoyé
+  /chats/{matchId}/gift:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Offrir un cadeau culturel ivoirien en Cauris
+      parameters:
+        - in: path
+          name: matchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Cadeau envoyé
+  /chats/{matchId}/date-invite:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Proposer un rendez-vous dans un lieu Safe Date vérifié
+      parameters:
+        - in: path
+          name: matchId
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Invitation envoyée
+  /safety/challenge:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Obtenir le défi selfie gestuel du jour et le détail du score de confiance
+      responses:
+        '200':
+          description: Défi et métriques
+  /safety/verify-selfie:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Soumettre le défi selfie et obtenir le badge Vérifié 225
+      responses:
+        '200':
+          description: Badge Vérifié 225 activé
+  /safety/report:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Signaler et bloquer un profil suspect
+      responses:
+        '200':
+          description: Signalement enregistré
+  /store/catalog:
+    get:
+      summary: Catalogue des Pass XOF, Packs Cauris, Cadeaux et Moyens GeniusPay
+      responses:
+        '200':
+          description: Catalogue complet
+  /wallet:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Solde de Cauris, historique des transactions et commandes GeniusPay
+      responses:
+        '200':
+          description: Portefeuille utilisateur
+  /wallet/daily-checkin:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Réclamer le bonus quotidien de Cauris
+      responses:
+        '200':
+          description: Bonus crédité
+  /payments/checkout:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Initier un paiement GeniusPay (Wave, Orange Money, MTN MoMo, Moov, Carte)
+      responses:
+        '201':
+          description: Session checkout créée avec référence MTX-...
+  /payments/{reference}/status:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Vérifier l'état d'une transaction GeniusPay
+      parameters:
+        - in: path
+          name: reference
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Statut de la transaction
+  /webhooks/geniuspay:
+    post:
+      summary: Récepteur Webhook GeniusPay vérifié par signature HMAC-SHA256
+      responses:
+        '200':
+          description: Événement traité de manière idempotente
+  /dates/spots:
+    get:
+      security:
+        - BearerAuth: []
+      summary: Lister les lieux Safe Date et événements à Abidjan & Assinie
+      responses:
+        '200':
+          description: Liste des lieux et réservations
+  /dates/bookings:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Réserver un billet Safe Date payable par GeniusPay (Web & Mobile)
+      responses:
+        '201':
+          description: Réservation initiée
