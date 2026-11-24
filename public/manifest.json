@@ -1,0 +1,17 @@
+{
+  "name": "AKWABA — Rencontres Côte d'Ivoire & Diaspora",
+  "short_name": "AKWABA",
+  "description": "Rencontres authentiques à Abidjan, en Côte d'Ivoire et dans la diaspora. Profils vérifiés 225, notes vocales et paiements Mobile Money via GeniusPay.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF6F0",
+  "theme_color": "#C84B24",
+  "lang": "fr",
+  "icons": [
+    {
+      "src": "/assets/profiles/aya.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg"
+    }
+  ]
+}
