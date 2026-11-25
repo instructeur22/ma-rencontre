@@ -6,7 +6,7 @@ import { config } from '../config.js';
 import { getDb, normalizeRows } from '../db/database.js';
 import { requireAuth } from '../middleware/auth.js';
 import { getBlockedUserIds, inspectMessageForScamSignals } from '../services/antiScamService.js';
-import { computeCompatibility } from '../services/matchingService.js';
+import { computeCompatibility, parseJsonSafe } from '../services/matchingService.js';
 import { STORE_CATALOG, getEffectiveSubscriptionTier, spendCauris } from '../services/monetizationService.js';
 import { createMatchPair } from './matching.js';
 import { emitToUser } from '../ws/realtime.js';
@@ -31,15 +31,15 @@ function scheduleDemoReplyIfApplicable(db, matchId, sender, partner, userContent
   setTimeout(() => {
     try {
       const lower = (userContent || '').toLowerCase();
-      let replyText = `Merci pour ton message ${sender.name} 😊 Ça me fait vraiment plaisir ! Tu es dans quel coin cette semaine ?`;
+      let replyText = `Merci pour ton message ${sender.name} ! Ça me fait vraiment plaisir. Tu es dans quel coin cette semaine ?`;
       if (lower.includes('attiéké') || lower.includes('garba') || lower.includes('alloco') || lower.includes('dîner')) {
-        replyText = `Ahaha tu parles mon langage là ! 🍽️ Quand tu veux on va tester une bonne adresse à ${partner.commune}.`;
+        replyText = `Ahaha tu parles mon langage là ! Quand tu veux on va tester une bonne adresse à ${partner.commune}.`;
       } else if (lower.includes('café') || lower.includes('verre') || lower.includes('brunch') || lower.includes('safe date') || lower.includes('cocody') || lower.includes('assinie')) {
-        replyText = `Excellente idée ! Un rendez-vous dans un lieu vérifié Safe Date, c'est classe et rassurant. Je suis partant(e) ! ✨`;
+        replyText = `Excellente idée ! Un rendez-vous dans un lieu vérifié Safe Date, c'est classe et rassurant. Je suis partant(e) !`;
       } else if (lower.includes('cadeau') || lower.includes('rose') || lower.includes('bissap') || lower.includes('cacao')) {
-        replyText = `Oh trop mignon cette attention !! 😍 Merci beaucoup, tu sais marquer des points dès le début !`;
+        replyText = `Oh trop mignon cette attention !! Merci beaucoup, tu sais marquer des points dès le début !`;
       } else if (lower.includes('vocal') || lower.includes('voix')) {
-        replyText = `J'adore entendre la vraie voix des gens, ça rend les échanges tellement plus sincères sur AKWABA 🎙️`;
+        replyText = `J'adore entendre la vraie voix des gens, ça rend les échanges tellement plus sincères sur AKWABA.`;
       }
 
       const msgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
@@ -304,7 +304,7 @@ router.post('/:matchId/gift', requireAuth, (req, res) => {
 });
 
 router.post('/:matchId/date-invite', requireAuth, (req, res) => {
-  const { spotId, proposedDate = 'Ce week-end à 18h30' } = req.body || {};
+  const { spotId, proposedDate = 'Ce week-end à 18h30', note = '' } = req.body || {};
   const db = getDb();
   const ctx = getMatchPartner(db, req.params.matchId, req.user.id);
   if (!ctx) {
@@ -315,18 +315,86 @@ router.post('/:matchId/date-invite', requireAuth, (req, res) => {
     return res.status(404).json({ success: false, error: { code: 'SPOT_NOT_FOUND', message: 'Lieu Safe Date introuvable.' } });
   }
 
+  const cleanDate = String(proposedDate || 'Ce week-end à 18h30').trim().slice(0, 80);
+  const cleanNote = String(note || '').trim().slice(0, 240);
   const msgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
-  const text = `📍 Invitation Safe Date : ${spot.name} (${spot.commune}) • ${proposedDate}`;
+  const text = `Invitation Safe Date : ${spot.name} (${spot.commune}) • ${cleanDate}`;
+  const metadata = {
+    spot: { ...spot },
+    proposedDate: cleanDate,
+    note: cleanNote,
+    status: 'pending',
+    proposedBy: req.user.id,
+  };
+
   db.prepare(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content, metadata_json)
      VALUES (?, ?, ?, ?, 'date_invite', ?, ?)`
-  ).run(msgId, ctx.match.id, req.user.id, ctx.partner.id, text, JSON.stringify({ spot: { ...spot }, proposedDate }));
+  ).run(msgId, ctx.match.id, req.user.id, ctx.partner.id, text, JSON.stringify(metadata));
 
   const saved = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId) };
   emitToUser(ctx.partner.id, { type: 'message', matchId: ctx.match.id, message: saved });
   scheduleDemoReplyIfApplicable(db, ctx.match.id, req.user, ctx.partner, 'safe date');
 
   return res.status(201).json({ success: true, data: { message: saved } });
+});
+
+router.post('/:matchId/messages/:messageId/respond-date', requireAuth, (req, res) => {
+  const { decision } = req.body || {};
+  if (!['accepted', 'declined'].includes(decision)) {
+    return res.status(422).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'decision doit être accepted ou declined.' },
+    });
+  }
+
+  const db = getDb();
+  const ctx = getMatchPartner(db, req.params.matchId, req.user.id);
+  if (!ctx) {
+    return res.status(404).json({ success: false, error: { code: 'MATCH_NOT_FOUND', message: 'Conversation introuvable.' } });
+  }
+
+  const inviteMsg = db
+    .prepare("SELECT * FROM messages WHERE id = ? AND match_id = ? AND msg_type = 'date_invite'")
+    .get(req.params.messageId, ctx.match.id);
+  if (!inviteMsg) {
+    return res.status(404).json({ success: false, error: { code: 'INVITE_NOT_FOUND', message: 'Invitation Safe Date introuvable.' } });
+  }
+
+  const meta = parseJsonSafe(inviteMsg.metadata_json, {});
+  const nextMeta = {
+    ...meta,
+    status: decision,
+    respondedBy: req.user.id,
+    respondedAt: new Date().toISOString(),
+  };
+
+  db.prepare('UPDATE messages SET metadata_json = ? WHERE id = ?').run(JSON.stringify(nextMeta), inviteMsg.id);
+  const updatedInvite = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(inviteMsg.id) };
+
+  const spotName = meta.spot?.name || 'ce lieu Safe Date';
+  const dateLabel = meta.proposedDate ? ` (${meta.proposedDate})` : '';
+  const replyText =
+    decision === 'accepted'
+      ? `${req.user.name} a accepté le Safe Date à ${spotName}${dateLabel} !`
+      : `${req.user.name} propose de replanifier le Safe Date à ${spotName}.`;
+
+  const replyId = `msg_${crypto.randomUUID().slice(0, 12)}`;
+  db.prepare(
+    `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content)
+     VALUES (?, ?, ?, ?, 'text', ?)`
+  ).run(replyId, ctx.match.id, req.user.id, ctx.partner.id, replyText);
+
+  const replyMessage = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(replyId) };
+  emitToUser(ctx.partner.id, { type: 'message', matchId: ctx.match.id, message: replyMessage });
+
+  return res.json({
+    success: true,
+    data: {
+      inviteMessage: updatedInvite,
+      replyMessage,
+    },
+  });
 });
 
 export default router;

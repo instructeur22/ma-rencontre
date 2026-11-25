@@ -59,6 +59,20 @@ export const VRAI_BABI_QUESTIONS = [
   },
 ];
 
+export const AVATAR_PRESETS = [
+  { id: 'aya', label: 'Aya', url: '/assets/profiles/aya.jpg' },
+  { id: 'maimouna', label: 'Maïmouna', url: '/assets/profiles/maimouna.jpg' },
+  { id: 'nadia', label: 'Nadia', url: '/assets/profiles/nadia.jpg' },
+  { id: 'grace', label: 'Grâce', url: '/assets/profiles/grace.jpg' },
+  { id: 'sarah', label: 'Sarah', url: '/assets/profiles/sarah.jpg' },
+  { id: 'aminata', label: 'Aminata', url: '/assets/profiles/aminata.jpg' },
+  { id: 'kouame', label: 'Kouamé', url: '/assets/profiles/kouame.jpg' },
+  { id: 'koffi', label: 'Koffi', url: '/assets/profiles/koffi.jpg' },
+  { id: 'ibrahim', label: 'Ibrahim', url: '/assets/profiles/ibrahim.jpg' },
+  { id: 'cedric', label: 'Cédric', url: '/assets/profiles/cedric.jpg' },
+  { id: 'jeanmarc', label: 'Jean-Marc', url: '/assets/profiles/jeanmarc.jpg' },
+];
+
 export function parseJsonSafe(str, fallback) {
   try {
     return str ? JSON.parse(str) : fallback;
@@ -68,28 +82,33 @@ export function parseJsonSafe(str, fallback) {
 }
 
 export function computeCompatibility(viewer, candidate) {
-  let score = 18; // base baseline
+  const baseline = 18;
+  let intentionPoints = 0;
+  let culturePoints = 0;
+  let interestsPoints = 0;
+  let geographyPoints = 0;
   const reasons = [];
+  const sharedQuizTraits = [];
 
   // 1. Intention alignment (up to 30 pts)
   if (viewer.intention && candidate.intention) {
     if (viewer.intention === candidate.intention) {
-      score += 30;
+      intentionPoints = 30;
       reasons.push(`Même intention : ${candidate.intention}`);
     } else if (
       (viewer.intention.includes('Mariage') && candidate.intention.includes('sérieuse')) ||
       (candidate.intention.includes('Mariage') && viewer.intention.includes('sérieuse'))
     ) {
-      score += 22;
+      intentionPoints = 22;
       reasons.push('Objectifs relationnels sérieux alignés');
     } else if (
       viewer.intention.includes('Diaspora') ||
       candidate.intention.includes('Diaspora')
     ) {
-      score += 18;
+      intentionPoints = 18;
       reasons.push('Ouverture Diaspora ↔ Côte d’Ivoire');
     } else {
-      score += 10;
+      intentionPoints = 10;
     }
   }
 
@@ -100,19 +119,20 @@ export function computeCompatibility(viewer, candidate) {
   for (const q of VRAI_BABI_QUESTIONS) {
     if (viewerQuiz[q.key] && candQuiz[q.key] && viewerQuiz[q.key] === candQuiz[q.key]) {
       quizMatches += 1;
+      sharedQuizTraits.push({ key: q.key, label: q.label, value: candQuiz[q.key] });
       if (q.key === 'music') reasons.push(`Même vibe musicale (${candQuiz[q.key]})`);
       if (q.key === 'outing') reasons.push(`Idée de sortie : ${candQuiz[q.key]}`);
       if (q.key === 'dish') reasons.push(`Team ${candQuiz[q.key]}`);
     }
   }
-  score += Math.min(32, quizMatches * 8);
+  culturePoints = Math.min(32, quizMatches * 8);
 
   // 3. Shared tags / interests (up to 12 pts)
   const viewerTags = parseJsonSafe(viewer.tags_json, []).map((t) => t.toLowerCase());
   const candTags = parseJsonSafe(candidate.tags_json, []);
   const commonTags = candTags.filter((t) => viewerTags.includes(t.toLowerCase()));
   if (commonTags.length > 0) {
-    score += Math.min(12, commonTags.length * 4);
+    interestsPoints = Math.min(12, commonTags.length * 4);
     reasons.push(`Points communs : ${commonTags.slice(0, 2).join(', ')}`);
   }
 
@@ -125,19 +145,20 @@ export function computeCompatibility(viewer, candidate) {
     : candidate.city;
 
   if (viewer.commune && candidate.commune && viewer.commune === candidate.commune) {
-    score += 8;
+    geographyPoints = 8;
     reasons.push(`Même zone : ${candidate.commune}`);
   } else if (viewerEffectiveCity && candEffectiveCity && viewerEffectiveCity === candEffectiveCity) {
-    score += 6;
+    geographyPoints = 6;
     if (candidate.passport_active) {
       reasons.push(`Passeport Babi vers ${candEffectiveCity}`);
     } else {
       reasons.push(`Tous deux à ${candEffectiveCity}`);
     }
   } else if (viewer.is_diaspora !== candidate.is_diaspora) {
-    score += 4;
+    geographyPoints = 4;
   }
 
+  const score = baseline + intentionPoints + culturePoints + interestsPoints + geographyPoints;
   const finalScore = Math.max(45, Math.min(99, score));
   if (reasons.length === 0) {
     reasons.push('Profil vérifié & complémentaire sur AKWABA');
@@ -147,14 +168,41 @@ export function computeCompatibility(viewer, candidate) {
     score: finalScore,
     reasons: reasons.slice(0, 3),
     commonTags,
+    sharedQuizTraits,
+    breakdown: {
+      baseline,
+      intention: intentionPoints,
+      culture: culturePoints,
+      interests: interestsPoints,
+      geography: geographyPoints,
+    },
   };
+}
+
+function acceptsGender(lookingFor, targetGender) {
+  if (!lookingFor || lookingFor === 'everyone' || lookingFor === 'all') return true;
+  if (lookingFor === 'women') return targetGender === 'woman';
+  if (lookingFor === 'men') return targetGender === 'man';
+  return false;
 }
 
 export function matchesLookingFor(viewer, candidate) {
   if (viewer.id === candidate.id) return false;
-  if (viewer.looking_for === 'women' && candidate.gender !== 'woman') return false;
-  if (viewer.looking_for === 'men' && candidate.gender !== 'man') return false;
-  return true;
+  return acceptsGender(viewer.looking_for, candidate.gender) && acceptsGender(candidate.looking_for, viewer.gender);
+}
+
+export function computeTrustBreakdown(userRow) {
+  const tags = parseJsonSafe(userRow.tags_json, []);
+  const vraiBabi = parseJsonSafe(userRow.vrai_babi_json, {});
+  const completeProfile =
+    userRow.bio && userRow.bio.length >= 40 && tags.length >= 2 && Object.keys(vraiBabi).length >= 3 ? 10 : 0;
+  return {
+    base: 40,
+    phoneVerified: userRow.phone_verified ? 15 : 0,
+    verified225: userRow.verified_225 ? 25 : 0,
+    voiceBio: userRow.voice_note_url ? 10 : 0,
+    completeProfile,
+  };
 }
 
 export function sanitizePublicProfile(userRow, viewer = null) {
@@ -188,6 +236,7 @@ export function sanitizePublicProfile(userRow, viewer = null) {
     tonightMood: userRow.tonight_mood,
     verified225: Boolean(userRow.verified_225),
     trustScore: userRow.trust_score,
+    trustBreakdown: computeTrustBreakdown(userRow),
     onlineStatus: Boolean(userRow.online_status),
     hasBoost,
     compatibility,

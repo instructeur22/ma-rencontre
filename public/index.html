@@ -18,7 +18,7 @@
     <div class="auth-shell">
       <div class="auth-editorial">
         <div class="brand-lockup">
-          <span class="brand-emblem" aria-hidden="true">☀</span>
+          <span class="brand-emblem" data-icon="sun" data-icon-class="ak-ico" aria-hidden="true"></span>
           <span class="brand-wordmark">AKWABA</span>
           <span class="brand-tag">Côte d'Ivoire &amp; Diaspora</span>
         </div>
@@ -26,13 +26,13 @@
           Des rencontres sincères, pensées pour Abidjan et la diaspora.
         </h1>
         <p class="editorial-lead">
-          Fini les faux profils et les swipes sans lendemain. Découvrez des célibataires vérifiés par défi selfie 225, écoutez leur vraie voix avant de matcher et connectez-vous de Cocody à Paris ou Montréal.
+          Fini les faux profils et les swipes sans lendemain. Découvrez des célibataires vérifiés par défi selfie 225, écoutez leur vraie voix avant même de voir leur visage et connectez-vous de Cocody à Paris ou Montréal.
         </p>
 
         <ul class="auth-highlights">
-          <li><strong>Bouclier Babi Anti-Brouteurs</strong> — Défi selfie gestuel, score de confiance et sentinelle anti-arnaque.</li>
-          <li><strong>La Voix d'Abidjan</strong> — Extraits vocaux sur chaque profil et notes audio dans le chat.</li>
-          <li><strong>Passeport Babi &amp; Safe Dates</strong> — Matchez avant d'atterrir à Port-Bouët et sortez dans des lieux vérifiés.</li>
+          <li><strong>Bouclier Babi Anti-Brouteurs</strong> — Défi selfie gestuel, score de confiance décomposé et sentinelle anti-arnaque.</li>
+          <li><strong>Coup de Foudre Vocal</strong> — Écoutez la vraie voix sur chaque profil pour révéler le portrait et lancer l'échange.</li>
+          <li><strong>Passeport Babi &amp; Safe Dates</strong> — Matchez avant d'atterrir à Port-Bouët et sortez dans des lieux publics vérifiés.</li>
           <li><strong>Paiements Mobile Money (GeniusPay)</strong> — Wave, Orange Money, MTN MoMo, Moov et Carte bancaire en FCFA.</li>
         </ul>
 
@@ -76,7 +76,7 @@
             </div>
             <div class="field">
               <label for="reg-age">Âge (18+)</label>
-              <input id="reg-age" type="number" min="18" max="90" value="27" required />
+              <input id="reg-age" type="number" min="18" max="100" value="27" required />
             </div>
           </div>
           <div class="field-row">
@@ -102,15 +102,6 @@
               <label for="reg-commune">Commune / Hub</label>
               <select id="reg-commune">
                 <option value="Cocody • Riviera">Cocody • Riviera</option>
-                <option value="Marcory • Zone 4">Marcory • Zone 4</option>
-                <option value="Plateau">Plateau</option>
-                <option value="Yopougon">Yopougon</option>
-                <option value="Grand-Bassam">Grand-Bassam</option>
-                <option value="Yamoussoukro">Yamoussoukro</option>
-                <option value="Bouaké">Bouaké</option>
-                <option value="Paris • Île-de-France">Paris • Île-de-France</option>
-                <option value="Montréal">Montréal</option>
-                <option value="Bruxelles">Bruxelles</option>
               </select>
             </div>
             <div class="field">
@@ -130,7 +121,7 @@
           <div class="field-row">
             <div class="field">
               <label for="reg-password">Mot de passe</label>
-              <input id="reg-password" type="password" minlength="6" placeholder="Min. 6 caractères" required />
+              <input id="reg-password" type="password" minlength="8" placeholder="Min. 8 caractères" required />
             </div>
             <div class="field">
               <label for="reg-referral">Code parrain (optionnel)</label>
@@ -144,15 +135,15 @@
   </div>
 
   <!-- MATCH CELEBRATION MODAL -->
-  <div id="match-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+  <div id="match-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="match-modal-title">
     <div class="modal-sheet surface-card match-sheet">
       <p class="eyebrow">Alchimie réciproque</p>
-      <h2 class="editorial-h2">Akwaba, c'est un Match !</h2>
+      <h2 id="match-modal-title" class="editorial-h2">Akwaba, c'est un Match !</h2>
       <p id="match-modal-desc" class="muted-text"></p>
       <div class="match-pair-avatars">
-        <img id="match-me-img" src="" alt="Votre photo" />
-        <span class="match-connector">♥</span>
-        <img id="match-partner-img" src="" alt="Photo du match" />
+        <img id="match-me-img" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'/%3E" alt="Votre photo" />
+        <span class="match-connector" data-icon="heart" data-icon-class="ak-ico" aria-hidden="true"></span>
+        <img id="match-partner-img" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'/%3E" alt="Photo du match" />
       </div>
       <div class="modal-actions-col">
         <button id="btn-match-open-chat" class="btn-primary btn-full" type="button">Écrire dans le Salon Privé</button>
@@ -162,11 +153,11 @@
   </div>
 
   <!-- DIRECT MESSAGE MODAL -->
-  <div id="dm-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+  <div id="dm-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="dm-modal-title">
     <div class="modal-sheet surface-card">
       <div class="modal-head">
-        <h3>Envoyer un DM Direct avant match</h3>
-        <button id="btn-close-dm-modal" class="icon-close" type="button" aria-label="Fermer">✕</button>
+        <h3 id="dm-modal-title">Envoyer un DM Direct avant match</h3>
+        <button id="btn-close-dm-modal" class="icon-close" type="button" aria-label="Fermer" data-icon="close" data-icon-class="ak-ico-sm"></button>
       </div>
       <p id="dm-target-label" class="muted-text"></p>
       <p class="info-banner">Coût : <strong>100 Cauris</strong> (gratuit avec Pass Diaspora VIP). La réponse de votre interlocuteur reste toujours 100 % gratuite.</p>
@@ -180,15 +171,76 @@
     </div>
   </div>
 
+  <!-- CONTEXTUAL REACTION MODAL (HINGE-STYLE VRAI BABI) -->
+  <div id="reaction-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="reaction-modal-title">
+    <div class="modal-sheet surface-card">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">Réaction contextuelle • Gratuite avec un Like</p>
+          <h3 id="reaction-modal-title">Réagir sur ce point précis</h3>
+        </div>
+        <button id="btn-close-reaction-modal" class="icon-close" type="button" aria-label="Fermer" data-icon="close" data-icon-class="ak-ico-sm"></button>
+      </div>
+      <div id="react-trait-quote" class="secret-quote"></div>
+      <form id="reaction-form" style="margin-top:0.85rem;">
+        <div class="field">
+          <label for="react-note-input">Votre mot d'accroche (envoyé automatiquement s'il y a match)</label>
+          <textarea id="react-note-input" rows="3" maxlength="280" placeholder="Ex : Moi aussi ! Quel est ton spot préféré à Cocody ?" required></textarea>
+        </div>
+        <div class="modal-actions-row">
+          <button type="button" id="btn-react-cancel" class="btn-secondary">Annuler</button>
+          <button type="submit" class="btn-primary">Aimer &amp; envoyer la réaction</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- SAFE DATE INVITE MODAL (CHAT) -->
+  <div id="safedate-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="safedate-modal-title">
+    <div class="modal-sheet surface-card">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">Rencontre réelle sécurisée • Abidjan &amp; Assinie</p>
+          <h3 id="safedate-modal-title">Proposer un Safe Date vérifié</h3>
+        </div>
+        <button id="btn-close-sd-modal" class="icon-close" type="button" aria-label="Fermer" data-icon="close" data-icon-class="ak-ico-sm"></button>
+      </div>
+      <form id="safedate-form">
+        <div class="field">
+          <label for="sd-spot-select">Lieu partenaire vérifié</label>
+          <select id="sd-spot-select" required></select>
+        </div>
+        <div id="sd-spot-preview" class="perk-note" style="margin-bottom:0.85rem;"></div>
+        <div class="field">
+          <label for="sd-date-input">Jour &amp; créneau proposé</label>
+          <input id="sd-date-input" type="text" value="Samedi • 17h30" maxlength="80" required />
+          <div class="quick-date-chips">
+            <button type="button" class="tool-chip sd-preset-chip" data-slot="Ce soir • 19h30">Ce soir 19h30</button>
+            <button type="button" class="tool-chip sd-preset-chip" data-slot="Vendredi • 19h00">Vendredi 19h</button>
+            <button type="button" class="tool-chip sd-preset-chip" data-slot="Dimanche • 11h30">Dimanche Brunch</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="sd-note-input">Mot personnel (optionnel)</label>
+          <textarea id="sd-note-input" rows="2" maxlength="240" placeholder="Ex : L'endroit est public et posé, ça te dit qu'on s'y retrouve ?"></textarea>
+        </div>
+        <div class="modal-actions-row">
+          <button type="button" id="btn-sd-cancel" class="btn-secondary">Annuler</button>
+          <button type="submit" class="btn-primary">Envoyer l'invitation Safe Date</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- GENIUSPAY CHECKOUT MODAL -->
-  <div id="geniuspay-modal" class="modal-backdrop" role="dialog" aria-modal="true">
+  <div id="geniuspay-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="gp-item-title">
     <div class="modal-sheet surface-card geniuspay-sheet">
       <div class="modal-head">
         <div>
           <p class="eyebrow">Paiement sécurisé GeniusPay • Côte d'Ivoire</p>
           <h3 id="gp-item-title">Finaliser le paiement</h3>
         </div>
-        <button id="btn-close-gp-modal" class="icon-close" type="button" aria-label="Fermer">✕</button>
+        <button id="btn-close-gp-modal" class="icon-close" type="button" aria-label="Fermer" data-icon="close" data-icon-class="ak-ico-sm"></button>
       </div>
 
       <div id="gp-step-select">
@@ -202,9 +254,7 @@
         </div>
         <div class="field">
           <label>Choisissez votre opérateur</label>
-          <div id="gp-method-list" class="gp-method-grid">
-            <!-- Populated dynamically -->
-          </div>
+          <div id="gp-method-list" class="gp-method-grid"></div>
         </div>
         <p id="gp-fees-note" class="muted-text small"></p>
         <button id="btn-gp-initiate" class="btn-primary btn-full" type="button">Lancer le paiement GeniusPay</button>
@@ -218,15 +268,18 @@
           </div>
           <p id="gp-checkout-status-msg" class="muted-text"></p>
           <div class="gp-actions-stack">
+            <a id="gp-external-link" href="#" target="_blank" rel="noopener" class="btn-primary btn-full hidden" style="text-align:center;text-decoration:none;">
+              Ouvrir la page de paiement GeniusPay
+            </a>
+            <button id="btn-gp-check-status" class="btn-secondary btn-full hidden" type="button">
+              J'ai payé — Vérifier le statut
+            </button>
             <button id="btn-gp-confirm-sandbox" class="btn-primary btn-full" type="button">
               Confirmer le paiement (Webhook HMAC Sandbox)
             </button>
             <button id="btn-gp-fail-sandbox" class="btn-secondary btn-full" type="button">
               Simuler un échec / annulation
             </button>
-            <a id="gp-external-link" href="#" target="_blank" rel="noopener" class="btn-link hidden">
-              Ouvrir la page de checkout GeniusPay
-            </a>
           </div>
         </div>
       </div>
@@ -238,7 +291,7 @@
     <header class="topbar">
       <div class="topbar-left">
         <button id="btn-brand-home" class="brand-btn" type="button">
-          <span class="brand-emblem" aria-hidden="true">☀</span>
+          <span class="brand-emblem" data-icon="sun" data-icon-class="ak-ico" aria-hidden="true"></span>
           <span class="brand-wordmark">AKWABA</span>
         </button>
         <span id="header-commune-pill" class="location-tag">Cocody • Riviera</span>
@@ -261,7 +314,7 @@
 
       <div class="topbar-right">
         <button id="btn-wallet-shortcut" class="wallet-pill" type="button" title="Ouvrir votre portefeuille Cauris">
-          <span class="cauris-icon">🐚</span>
+          <span class="cauris-icon" data-icon="cauris" data-icon-class="ak-ico-sm" aria-hidden="true"></span>
           <strong id="header-cauris">0</strong>
           <span class="wallet-unit">Cauris</span>
         </button>
@@ -283,18 +336,23 @@
               <button id="btn-reset-filters" class="btn-text" type="button">Tout voir</button>
             </div>
 
+            <div class="live-status-strip">
+              <span class="pulse-dot" aria-hidden="true"></span>
+              <span><strong id="discover-online-count">0</strong> profils compatibles</span>
+            </div>
+
+            <div class="voice-first-box">
+              <label class="check-line" style="margin-bottom:0.25rem;">
+                <input id="toggle-voice-first" type="checkbox" />
+                <span><strong>Coup de Foudre Vocal</strong></span>
+              </label>
+              <p class="muted-text small">Voile la photo jusqu'à 1,5 s d'écoute de sa vraie voix.</p>
+            </div>
+
             <div class="field">
               <label for="filter-commune">Commune / Ville / Diaspora</label>
               <select id="filter-commune">
-                <option value="all">Toute la Côte d'Ivoire &amp; Diaspora</option>
-                <option value="Cocody • Riviera">Cocody • Riviera</option>
-                <option value="Marcory • Zone 4">Marcory • Zone 4</option>
-                <option value="Plateau">Plateau</option>
-                <option value="Yopougon">Yopougon</option>
-                <option value="Grand-Bassam">Grand-Bassam</option>
-                <option value="Yamoussoukro">Yamoussoukro</option>
-                <option value="Paris • Île-de-France">Paris • Île-de-France</option>
-                <option value="Montréal">Montréal</option>
+                <option value="all">Toute la CI &amp; Diaspora</option>
               </select>
             </div>
 
@@ -323,8 +381,8 @@
             </label>
 
             <div class="passport-summary-box">
-              <div class="panel-title-row">
-                <strong>Passeport Babi</strong>
+              <div class="panel-title-row" style="margin-bottom:0.35rem;">
+                <strong class="inline-icon-label"><span data-icon="plane" data-icon-class="ak-ico-sm"></span> Passeport Babi</strong>
                 <button id="btn-open-passport" class="btn-text" type="button">Configurer</button>
               </div>
               <p id="passport-status-text" class="muted-text small">
@@ -333,31 +391,29 @@
             </div>
 
             <div class="rewind-row">
-              <button id="btn-rewind-pass" class="btn-secondary btn-full" type="button">
-                ↺ Revenir sur le dernier profil passé
+              <button id="btn-rewind-pass" class="btn-secondary btn-full btn-with-icon" type="button">
+                <span data-icon="rewind" data-icon-class="ak-ico-sm"></span>
+                <span>Revenir sur le dernier profil</span>
               </button>
             </div>
           </aside>
 
           <!-- Center Card Stack -->
           <div class="deck-col">
-            <div id="discover-card-host" class="discover-card-host">
-              <!-- Populated dynamically -->
-            </div>
+            <div id="discover-card-host" class="discover-card-host"></div>
             <div class="swipe-bar">
-              <button id="btn-swipe-pass" class="action-circle action-pass" type="button" title="Passer (←)">✕</button>
-              <button id="btn-open-dm" class="action-pill action-dm" type="button" title="Écrire avant match">
-                DM Direct
+              <button id="btn-swipe-pass" class="action-circle action-pass" type="button" title="Passer (Flèche gauche)" aria-label="Passer" data-icon="close" data-icon-class="ak-ico"></button>
+              <button id="btn-open-dm" class="action-pill action-dm btn-with-icon" type="button" title="Écrire avant match">
+                <span data-icon="message" data-icon-class="ak-ico-sm"></span>
+                <span>DM Direct</span>
               </button>
-              <button id="btn-swipe-super" class="action-circle action-super" type="button" title="Super Coup de Cœur (↑)">★</button>
-              <button id="btn-swipe-like" class="action-circle action-like" type="button" title="Aimer (→)">♥</button>
+              <button id="btn-swipe-super" class="action-circle action-super" type="button" title="Super Coup de Cœur (Flèche haut)" aria-label="Super Coup de Cœur" data-icon="spark" data-icon-class="ak-ico"></button>
+              <button id="btn-swipe-like" class="action-circle action-like" type="button" title="Aimer (Flèche droite)" aria-label="Aimer" data-icon="heart" data-icon-class="ak-ico"></button>
             </div>
           </div>
 
           <!-- Compatibility & Icebreakers Column -->
-          <aside id="discover-insights-col" class="surface-card panel-pad insights-col">
-            <!-- Populated dynamically -->
-          </aside>
+          <aside id="discover-insights-col" class="surface-card panel-pad insights-col"></aside>
         </div>
       </section>
 
@@ -371,23 +427,24 @@
           <div class="mood-bar">
             <label for="my-tonight-mood">Mon envie du soir :</label>
             <select id="my-tonight-mood">
-              <option value="☕ Café posé à Cocody Deux-Plateaux">☕ Café posé à Cocody</option>
-              <option value="🌆 Sunset sur Rooftop Zone 4">🌆 Sunset Rooftop Zone 4</option>
-              <option value="🌴 Escapade plage à Grand-Bassam / Assinie">🌴 Plage Bassam / Assinie</option>
-              <option value="🍽️ Attiéké poisson ou grillades en maquis chic">🍽️ Grillades &amp; Maquis chic</option>
+              <option value="Café posé à Cocody Deux-Plateaux">Café posé à Cocody</option>
+              <option value="Sunset sur Rooftop Zone 4">Sunset Rooftop Zone 4</option>
+              <option value="Escapade plage à Grand-Bassam / Assinie">Plage Bassam / Assinie</option>
+              <option value="Attiéké poisson ou grillades en maquis chic">Grillades &amp; Maquis chic</option>
             </select>
           </div>
         </div>
 
-        <h3 class="sub-heading">Lieux Partenaires Safe Date &amp; Billetterie Événements (GeniusPay)</h3>
-        <div id="safe-spots-grid" class="spots-grid">
-          <!-- Populated dynamically -->
+        <div id="my-bookings-section" class="bookings-section hidden">
+          <h3 class="sub-heading">Mes Réservations &amp; Pass Safe Date</h3>
+          <div id="my-bookings-list" class="bookings-grid"></div>
         </div>
 
+        <h3 class="sub-heading">Lieux Partenaires Safe Date &amp; Billetterie Événements (GeniusPay)</h3>
+        <div id="safe-spots-grid" class="spots-grid"></div>
+
         <h3 class="sub-heading">Membres disponibles ce soir</h3>
-        <div id="tonight-members-grid" class="members-grid">
-          <!-- Populated dynamically -->
-        </div>
+        <div id="tonight-members-grid" class="members-grid"></div>
       </section>
 
       <!-- VIEW 3: ADMIRERS & MATCHES -->
@@ -403,13 +460,8 @@
           </div>
         </div>
 
-        <div id="likes-tab-matches" class="members-grid">
-          <!-- Populated dynamically -->
-        </div>
-
-        <div id="likes-tab-admirers" class="members-grid hidden">
-          <!-- Populated dynamically -->
-        </div>
+        <div id="likes-tab-matches" class="members-grid"></div>
+        <div id="likes-tab-admirers" class="members-grid hidden"></div>
       </section>
 
       <!-- VIEW 4: SALON PRIVÉ (REAL-TIME CHAT) -->
@@ -419,39 +471,43 @@
             <div class="chat-col-head">
               <h3>Conversations</h3>
             </div>
-            <div id="chat-threads-list" class="chat-threads-list">
-              <!-- Populated dynamically -->
-            </div>
+            <div id="chat-threads-list" class="chat-threads-list"></div>
           </aside>
 
           <div class="chat-room-col">
-            <div id="chat-room-header" class="chat-room-header">
-              <!-- Populated dynamically -->
-            </div>
+            <div id="chat-room-header" class="chat-room-header"></div>
 
             <div id="chat-scam-banner" class="scam-warning hidden">
               <strong>Bouclier Babi :</strong> N'envoyez jamais d'argent (Wave, Orange Money, Western Union) à une personne que vous n'avez pas rencontrée en vrai.
             </div>
 
-            <div id="chat-messages-stream" class="chat-messages-stream">
-              <!-- Populated dynamically -->
+            <div id="chat-messages-stream" class="chat-messages-stream"></div>
+
+            <div id="chat-typing-indicator" class="typing-indicator hidden" aria-live="polite">
+              <span class="typing-dots"><i></i><i></i><i></i></span>
+              <span id="chat-typing-label">En train d'écrire...</span>
             </div>
 
             <!-- Cultural Gifts Drawer -->
-            <div id="chat-gifts-drawer" class="gifts-drawer hidden">
-              <!-- Populated dynamically -->
-            </div>
+            <div id="chat-gifts-drawer" class="gifts-drawer hidden"></div>
 
             <div class="chat-tools-strip">
               <button class="tool-chip" data-ice="Tu es plutôt attiéké poisson braisé à Marcory ou brunch posé à Cocody ?" type="button">Brise-glace Babi</button>
               <button class="tool-chip" data-ice="On écoute ta note vocale ! C'est quoi ta musique zouglou ou afrobeats du moment ?" type="button">Vibe musicale</button>
-              <button id="btn-toggle-gifts" class="tool-chip" type="button">🎁 Offrir un cadeau</button>
-              <button id="btn-invite-safedate" class="tool-chip" type="button">📍 Proposer un Safe Date</button>
+              <button id="btn-toggle-gifts" class="tool-chip btn-with-icon" type="button">
+                <span data-icon="gift" data-icon-class="ak-ico-xs"></span>
+                <span>Offrir un cadeau</span>
+              </button>
+              <button id="btn-invite-safedate" class="tool-chip btn-with-icon" type="button">
+                <span data-icon="mapPin" data-icon-class="ak-ico-xs"></span>
+                <span>Proposer un Safe Date</span>
+              </button>
             </div>
 
             <form id="chat-send-form" class="chat-compose-bar">
-              <button id="btn-record-chat-voice" class="btn-voice-rec" type="button" title="Enregistrer un message vocal">
-                🎙️ Vocal
+              <button id="btn-record-chat-voice" class="btn-voice-rec btn-with-icon" type="button" title="Enregistrer un message vocal">
+                <span data-icon="mic" data-icon-class="ak-ico-sm"></span>
+                <span>Vocal</span>
               </button>
               <input id="chat-text-input" type="text" placeholder="Écrivez votre message en toute sécurité..." autocomplete="off" />
               <button type="submit" class="btn-primary">Envoyer</button>
@@ -477,14 +533,10 @@
         </div>
 
         <h3 class="sub-heading">Pass Flexibles en FCFA (XOF) — Via GeniusPay</h3>
-        <div id="store-passes-grid" class="pricing-grid">
-          <!-- Populated dynamically -->
-        </div>
+        <div id="store-passes-grid" class="pricing-grid"></div>
 
         <h3 class="sub-heading">Packs de Cauris à l'acte (Sans abonnement)</h3>
-        <div id="store-cauris-grid" class="pricing-grid">
-          <!-- Populated dynamically -->
-        </div>
+        <div id="store-cauris-grid" class="pricing-grid"></div>
 
         <div class="store-bottom-grid">
           <div class="surface-card panel-pad">
@@ -509,7 +561,7 @@
           <div class="profile-left-stack">
             <div class="surface-card panel-pad">
               <div class="profile-card-mini">
-                <img id="me-preview-photo" src="" alt="Ma photo de profil" class="me-avatar-lg" />
+                <img id="me-preview-photo" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'/%3E" alt="Ma photo de profil" class="me-avatar-lg" />
                 <div>
                   <h2 id="me-preview-name" class="editorial-h2"></h2>
                   <p id="me-preview-meta" class="muted-text"></p>
@@ -523,12 +575,14 @@
                   <strong id="me-trust-score">0/100</strong>
                 </div>
                 <div class="meter-track"><div id="me-trust-fill" class="meter-fill"></div></div>
+                <div id="me-trust-breakdown" class="trust-breakdown-pills"></div>
                 <p class="muted-text small">Complétez la vérification Selfie 225 et ajoutez votre note vocale pour maximiser vos matchs.</p>
               </div>
 
               <div class="profile-quick-actions">
-                <button id="btn-boost-profile" class="btn-primary btn-full" type="button">
-                  ⚡ Activer Boost 24h (150 Cauris)
+                <button id="btn-boost-profile" class="btn-primary btn-full btn-with-icon" type="button">
+                  <span data-icon="bolt" data-icon-class="ak-ico-sm"></span>
+                  <span>Activer Boost 24h (150 Cauris)</span>
                 </button>
                 <button id="btn-toggle-incognito-profile" class="btn-secondary btn-full" type="button">
                   Basculer Mode Incognito
@@ -546,13 +600,17 @@
 
             <!-- Bouclier Babi Verification Card -->
             <div class="surface-card panel-pad">
-              <h3>Vérification Selfie 225 (Anti-Brouteur)</h3>
+              <h3 class="inline-icon-label"><span data-icon="shieldCheck" data-icon-class="ak-ico-sm"></span> Vérification Selfie 225 (Anti-Brouteur)</h3>
               <p id="safety-challenge-label" class="muted-text small"></p>
               <div class="camera-stage hidden" id="selfie-camera-stage">
                 <video id="selfie-video" autoplay playsinline muted></video>
+                <canvas id="selfie-canvas" class="hidden"></canvas>
               </div>
               <div class="selfie-btn-row">
-                <button id="btn-start-selfie-cam" class="btn-secondary" type="button">Activer la caméra</button>
+                <button id="btn-start-selfie-cam" class="btn-secondary btn-with-icon" type="button">
+                  <span data-icon="camera" data-icon-class="ak-ico-sm"></span>
+                  <span>Activer la caméra</span>
+                </button>
                 <button id="btn-submit-selfie" class="btn-primary" type="button">Valider le défi Selfie 225</button>
               </div>
               <div class="field inline-phone-verify">
@@ -566,11 +624,14 @@
 
             <!-- Voice Bio Studio Card -->
             <div class="surface-card panel-pad">
-              <h3>La Voix d'Abidjan (Bio Vocale 30s)</h3>
+              <h3 class="inline-icon-label"><span data-icon="mic" data-icon-class="ak-ico-sm"></span> La Voix d'Abidjan (Bio Vocale 30s)</h3>
               <p class="muted-text small">Les profils avec note vocale obtiennent +32 % de réponses sincères.</p>
               <div id="me-voice-player-host"></div>
               <div class="selfie-btn-row">
-                <button id="btn-record-bio-voice" class="btn-primary" type="button">🎙️ Enregistrer ma voix</button>
+                <button id="btn-record-bio-voice" class="btn-primary btn-with-icon" type="button">
+                  <span data-icon="mic" data-icon-class="ak-ico-sm"></span>
+                  <span>Enregistrer ma voix</span>
+                </button>
                 <button id="btn-demo-bio-voice" class="btn-secondary" type="button">Tester avec audio démo</button>
               </div>
             </div>
@@ -580,6 +641,22 @@
           <form id="profile-edit-form" class="surface-card panel-pad profile-form-col">
             <h2 class="editorial-h2">Mon Profil &amp; Quiz Vrai Babi</h2>
 
+            <div class="avatar-studio-block">
+              <div class="panel-title-row" style="margin-bottom:0.5rem;">
+                <h4>Photo de profil</h4>
+                <button id="btn-upload-avatar" class="btn-secondary btn-with-icon" type="button" style="padding:0.42rem 0.9rem;font-size:0.8rem;">
+                  <span data-icon="camera" data-icon-class="ak-ico-sm"></span>
+                  <span>Importer une photo</span>
+                </button>
+                <input id="input-avatar-file" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" />
+              </div>
+              <div id="profile-avatar-presets" class="avatar-presets-grid"></div>
+              <div class="field" style="margin-top:0.65rem;margin-bottom:0;">
+                <label for="edit-avatar-url">Ou URL d'image (HTTPS / locale)</label>
+                <input id="edit-avatar-url" type="text" placeholder="/assets/profiles/kouame.jpg" />
+              </div>
+            </div>
+
             <div class="field-row">
               <div class="field">
                 <label for="edit-name">Prénom</label>
@@ -587,27 +664,14 @@
               </div>
               <div class="field">
                 <label for="edit-age">Âge</label>
-                <input id="edit-age" type="number" min="18" max="90" required />
+                <input id="edit-age" type="number" min="18" max="100" required />
               </div>
             </div>
 
             <div class="field-row">
               <div class="field">
                 <label for="edit-commune">Commune / Hub</label>
-                <select id="edit-commune">
-                  <option value="Cocody • Riviera">Cocody • Riviera</option>
-                  <option value="Marcory • Zone 4">Marcory • Zone 4</option>
-                  <option value="Plateau">Plateau</option>
-                  <option value="Yopougon">Yopougon</option>
-                  <option value="Bingerville">Bingerville</option>
-                  <option value="Grand-Bassam">Grand-Bassam</option>
-                  <option value="Yamoussoukro">Yamoussoukro</option>
-                  <option value="Bouaké">Bouaké</option>
-                  <option value="San-Pédro">San-Pédro</option>
-                  <option value="Paris • Île-de-France">Paris • Île-de-France</option>
-                  <option value="Montréal">Montréal</option>
-                  <option value="Bruxelles">Bruxelles</option>
-                </select>
+                <select id="edit-commune"></select>
               </div>
               <div class="field">
                 <label for="edit-intention">Intention</label>
@@ -651,14 +715,15 @@
             </div>
 
             <div class="passport-edit-block">
-              <h4>Passeport Babi (Voyage / Retour au pays)</h4>
-              <div class="field-row">
+              <h4 class="inline-icon-label"><span data-icon="plane" data-icon-class="ak-ico-sm"></span> Passeport Babi (Voyage / Retour au pays)</h4>
+              <div class="field-row passport-three-col">
                 <div class="field">
                   <label for="edit-passport-city">Ville de destination</label>
                   <select id="edit-passport-city">
                     <option value="">Aucun voyage prévu</option>
                     <option value="Abidjan">Abidjan</option>
                     <option value="Grand-Bassam">Grand-Bassam</option>
+                    <option value="Assinie">Assinie</option>
                     <option value="Yamoussoukro">Yamoussoukro</option>
                     <option value="Paris">Paris</option>
                     <option value="Montréal">Montréal</option>
@@ -668,12 +733,15 @@
                   <label for="edit-passport-arrival">Date d'arrivée</label>
                   <input id="edit-passport-arrival" type="date" />
                 </div>
+                <div class="field">
+                  <label for="edit-passport-departure">Date de retour</label>
+                  <input id="edit-passport-departure" type="date" />
+                </div>
               </div>
             </div>
 
             <div id="vrai-babi-quiz-fields" class="quiz-fields-block">
               <h4>Quiz Culturel « Vrai Babi » (alimente votre score d'alchimie)</h4>
-              <!-- Populated dynamically -->
             </div>
 
             <button type="submit" class="btn-primary">Enregistrer mon profil</button>
@@ -684,12 +752,36 @@
 
     <!-- Mobile Bottom Navigation -->
     <nav class="mobile-bottom-nav" aria-label="Navigation mobile">
-      <button class="m-nav-btn active" data-view="discover">Découvrir</button>
-      <button class="m-nav-btn" data-view="dates">Safe Dates</button>
-      <button class="m-nav-btn" data-view="likes">Matchs</button>
-      <button class="m-nav-btn" data-view="chat">Salon</button>
-      <button class="m-nav-btn" data-view="store">Cauris</button>
-      <button class="m-nav-btn" data-view="profile">Profil</button>
+      <button class="m-nav-btn active" data-view="discover">
+        <span data-icon="compass" data-icon-class="ak-ico-sm"></span>
+        <span>Découvrir</span>
+      </button>
+      <button class="m-nav-btn" data-view="dates">
+        <span data-icon="calendar" data-icon-class="ak-ico-sm"></span>
+        <span>Safe Dates</span>
+      </button>
+      <button class="m-nav-btn" data-view="likes">
+        <span class="m-nav-ico-wrap">
+          <span data-icon="heart" data-icon-class="ak-ico-sm"></span>
+          <span id="m-nav-likes-count" class="m-badge hidden">0</span>
+        </span>
+        <span>Matchs</span>
+      </button>
+      <button class="m-nav-btn" data-view="chat">
+        <span class="m-nav-ico-wrap">
+          <span data-icon="message" data-icon-class="ak-ico-sm"></span>
+          <span id="m-nav-chat-count" class="m-badge hidden">0</span>
+        </span>
+        <span>Salon</span>
+      </button>
+      <button class="m-nav-btn" data-view="store">
+        <span data-icon="cauris" data-icon-class="ak-ico-sm"></span>
+        <span>Cauris</span>
+      </button>
+      <button class="m-nav-btn" data-view="profile">
+        <span data-icon="user" data-icon-class="ak-ico-sm"></span>
+        <span>Profil</span>
+      </button>
     </nav>
   </div>
 

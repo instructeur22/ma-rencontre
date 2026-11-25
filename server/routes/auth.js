@@ -8,9 +8,11 @@ import { creditCauris, getEffectiveSubscriptionTier } from '../services/monetiza
 import { computeTrustScore } from '../services/antiScamService.js';
 import {
   ABIDJAN_COMMUNES,
+  AVATAR_PRESETS,
   CI_CITIES,
   DIASPORA_HUBS,
   VRAI_BABI_QUESTIONS,
+  computeTrustBreakdown,
   parseJsonSafe,
 } from '../services/matchingService.js';
 
@@ -49,6 +51,7 @@ export function formatSelfUser(row) {
     incognito: Boolean(row.incognito),
     verified225: Boolean(row.verified_225),
     trustScore: row.trust_score,
+    trustBreakdown: computeTrustBreakdown(row),
     caurisBalance: row.cauris_balance,
     subscriptionTier: getEffectiveSubscriptionTier(row),
     subscriptionExpiresAt: row.subscription_expires_at,
@@ -100,8 +103,9 @@ router.post('/register', (req, res) => {
       error: { code: 'AGE_RESTRICTED', message: 'AKWABA est strictement réservé aux personnes majeures (18+).' },
     });
   }
-  const safeGender = ['man', 'woman'].includes(gender) ? gender : 'man';
-  const safeLookingFor = ['men', 'women', 'all'].includes(lookingFor) ? lookingFor : 'women';
+  const safeGender = ['man', 'woman', 'nonbinary'].includes(gender) ? gender : 'man';
+  const normalizedLooking = lookingFor === 'all' ? 'everyone' : lookingFor;
+  const safeLookingFor = ['men', 'women', 'everyone'].includes(normalizedLooking) ? normalizedLooking : 'women';
   const cleanName = String(name).trim().slice(0, 80);
   if (!cleanName) {
     return res.status(422).json({
@@ -236,6 +240,7 @@ router.get('/me', requireAuth, (req, res) => {
         cities: CI_CITIES,
         diasporaHubs: DIASPORA_HUBS,
         vraiBabiQuestions: VRAI_BABI_QUESTIONS,
+        avatarPresets: AVATAR_PRESETS,
       },
     },
   });

@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { getDb, normalizeRows } from '../db/database.js';
 import { requireAuth } from '../middleware/auth.js';
 import { computeCompatibility, sanitizePublicProfile } from '../services/matchingService.js';
-import { getBlockedUserIds } from '../services/antiScamService.js';
+import { getBlockedUserIds, inspectMessageForScamSignals } from '../services/antiScamService.js';
 import { getEffectiveSubscriptionTier, spendCauris } from '../services/monetizationService.js';
 import { emitToUser } from '../ws/realtime.js';
 
@@ -24,13 +24,14 @@ export function createMatchPair(db, userOneId, userTwoId, compatibilityScore, is
 }
 
 router.post('/swipes', requireAuth, (req, res) => {
-  const { targetId, action } = req.body || {};
+  const { targetId, action, reactionNote } = req.body || {};
   if (!targetId || !['pass', 'like', 'super_like'].includes(action)) {
     return res.status(422).json({
       success: false,
       error: { code: 'VALIDATION_ERROR', message: 'targetId et action valide (pass, like, super_like) requis.' },
     });
   }
+  const cleanReaction = typeof reactionNote === 'string' ? reactionNote.trim().slice(0, 280) : '';
 
   const db = getDb();
   const actor = req.user;
@@ -91,9 +92,30 @@ router.post('/swipes', requireAuth, (req, res) => {
       isMatch = true;
       matchObj = createMatchPair(db, actor.id, target.id, compat.score, action === 'super_like' || reciprocal?.action === 'super_like');
 
+      if (cleanReaction) {
+        const scamCheck = inspectMessageForScamSignals(cleanReaction);
+        const reactionMsgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
+        db.prepare(
+          `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content, scam_flagged, scam_reason)
+           VALUES (?, ?, ?, ?, 'text', ?, ?, ?)`
+        ).run(
+          reactionMsgId,
+          matchObj.id,
+          actor.id,
+          target.id,
+          cleanReaction,
+          scamCheck.flagged ? 1 : 0,
+          scamCheck.reason
+        );
+        const savedReaction = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(reactionMsgId) };
+        emitToUser(target.id, { type: 'message', matchId: matchObj.id, message: savedReaction });
+      }
+
       if (matchObj.created && target.is_demo_bot) {
         const msgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
-        const greeting = `Akwaba ${actor.name} ! Ravi(e) de matcher avec toi (${compat.score}% d'alchimie). ${compat.reasons[0] || ''}`;
+        const greeting = cleanReaction
+          ? `Akwaba ${actor.name} ! J’adore ta réaction sur mon profil (${compat.score}% d’alchimie). On continue d’en parler ici ?`
+          : `Akwaba ${actor.name} ! Ravi(e) de matcher avec toi (${compat.score}% d'alchimie). ${compat.reasons[0] || ''}`;
         db.prepare(
           `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content)
            VALUES (?, ?, ?, ?, 'text', ?)`

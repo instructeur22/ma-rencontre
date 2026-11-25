@@ -106,6 +106,7 @@ router.post('/bookings', requireAuth, async (req, res) => {
         reference: gp.reference,
         totalXof,
         checkoutUrl: gp.checkout_url || gp.payment_url,
+        environment: gp.environment || config.geniusPay.env,
         simulated: Boolean(gp.simulated),
         spot: { ...spot },
       },

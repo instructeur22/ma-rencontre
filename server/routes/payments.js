@@ -114,7 +114,7 @@ router.post('/payments/checkout', requireAuth, async (req, res) => {
       orderId,
       gpResponse.reference,
       req.user.id,
-      gpResponse.payment_method || paymentMethod || '',
+      gpResponse.payment_method || gpResponse.gateway || paymentMethod || '',
       item.code,
       item.itemType,
       gpResponse.amount,
@@ -158,10 +158,24 @@ router.get('/payments/:reference/status', requireAuth, async (req, res) => {
       return res.status(404).json({ success: false, error: { code: 'TRANSACTION_NOT_FOUND', message: 'Transaction introuvable.' } });
     }
 
+    let fulfillment = null;
     if (order.status === 'pending' && !config.geniusPay.useLocalSimulator) {
       const remote = await fetchGeniusPayPaymentStatus(order.reference);
-      if (remote && remote.status === 'completed') {
-        fulfillPaymentOrder(db, order.reference, remote);
+      const remoteStatus = String(remote?.status || '').toLowerCase();
+      if (remote && ['completed', 'paid', 'succeeded', 'success'].includes(remoteStatus)) {
+        fulfillment = fulfillPaymentOrder(db, order.reference, remote);
+        if (fulfillment.ok && !fulfillment.alreadyFulfilled) {
+          emitToUser(order.user_id, {
+            type: 'payment_completed',
+            reference: order.reference,
+            grantedSummary: fulfillment.grantedSummary,
+          });
+        }
+      } else if (remote && ['failed', 'cancelled', 'expired'].includes(remoteStatus)) {
+        db.prepare('UPDATE payment_orders SET status = ? WHERE reference = ? AND fulfilled = 0').run(
+          remoteStatus,
+          order.reference
+        );
       }
     }
 
@@ -172,6 +186,7 @@ router.get('/payments/:reference/status', requireAuth, async (req, res) => {
       success: true,
       data: {
         order: { ...refreshed },
+        grantedSummary: fulfillment?.grantedSummary || '',
         user: formatSelfUser(updatedUser),
       },
     });

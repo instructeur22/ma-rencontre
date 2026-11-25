@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const explicitPort = process.env.PORT;
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -9,6 +10,11 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
 const nodeEnv = process.env.NODE_ENV || 'development';
+const port = Number(process.env.PORT || 3000);
+let appBaseUrl = process.env.APP_BASE_URL || `http://localhost:${port}`;
+if (nodeEnv !== 'production' && explicitPort && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(appBaseUrl)) {
+  appBaseUrl = `http://localhost:${port}`;
+}
 const useLocalSimulator =
   process.env.GENIUSPAY_LOCAL_SIMULATOR === 'true' ||
   !process.env.GENIUSPAY_PUBLIC_KEY ||
@@ -25,9 +31,9 @@ if (nodeEnv === 'production') {
 
 export const config = {
   rootDir: ROOT_DIR,
-  port: Number(process.env.PORT || 3000),
+  port,
   nodeEnv,
-  appBaseUrl: process.env.APP_BASE_URL || `http://localhost:${process.env.PORT || 3000}`,
+  appBaseUrl,
   corsOrigin: process.env.CORS_ORIGIN || '*',
   allowDemoLogin: process.env.ALLOW_DEMO_LOGIN === 'true' || nodeEnv !== 'production',
   jwtSecret: process.env.JWT_SECRET || 'akwaba_dev_secret_change_in_production_225',

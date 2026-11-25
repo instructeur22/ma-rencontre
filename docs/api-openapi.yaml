@@ -108,6 +108,16 @@ paths:
       responses:
         '200':
           description: Note vocale enregistrée
+  /profiles/me/avatar:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Uploader une photo de profil locale (JPEG, PNG, WebP base64 avec validation magic-bytes)
+      responses:
+        '200':
+          description: Photo de profil mise à jour
+        '422':
+          description: Format image invalide
   /profiles/me/passport:
     post:
       security:
@@ -136,10 +146,10 @@ paths:
     post:
       security:
         - BearerAuth: []
-      summary: Enregistrer une action pass, like ou super_like et détecter un match mutuel
+      summary: Enregistrer une action pass, like ou super_like (avec reactionNote optionnel) et détecter un match mutuel
       responses:
         '200':
-          description: Action enregistrée
+          description: Action enregistrée (inclut breakdown d'alchimie et trustBreakdown)
   /swipes/rewind:
     post:
       security:
@@ -245,7 +255,7 @@ paths:
     post:
       security:
         - BearerAuth: []
-      summary: Proposer un rendez-vous dans un lieu Safe Date vérifié
+      summary: Proposer un rendez-vous dans un lieu Safe Date vérifié (avec créneau et message)
       parameters:
         - in: path
           name: matchId
@@ -255,6 +265,25 @@ paths:
       responses:
         '201':
           description: Invitation envoyée
+  /chats/{matchId}/messages/{messageId}/respond-date:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Accepter ou décliner une invitation Safe Date dans le Salon Privé
+      parameters:
+        - in: path
+          name: matchId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: messageId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Statut de l'invitation mis à jour et confirmation postée
   /safety/challenge:
     get:
       security:

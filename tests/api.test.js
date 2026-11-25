@@ -4,16 +4,19 @@ import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { WebSocket } from 'ws';
 import { config } from '../server/config.js';
 import { setDbForTests } from '../server/db/database.js';
 import { seedDatabase } from '../server/db/seed.js';
 import { createApp } from '../server/app.js';
+import { setupWebSocket } from '../server/ws/realtime.js';
 import { signWebhookPayload } from '../server/services/geniusPayService.js';
 
 let server;
 let baseUrl;
 let db;
 let kouameToken;
+let prevSimulatorFlag;
 
 async function req(method, endpoint, body = null, token = null, extraHeaders = {}) {
   const headers = { 'Content-Type': 'application/json', ...extraHeaders };
@@ -29,6 +32,8 @@ async function req(method, endpoint, body = null, token = null, extraHeaders = {
 
 describe('AKWABA API & GeniusPay Integration Suite', () => {
   before(async () => {
+    prevSimulatorFlag = config.geniusPay.useLocalSimulator;
+    config.geniusPay.useLocalSimulator = true;
     db = new DatabaseSync(':memory:');
     const schema = fs.readFileSync(path.join(config.rootDir, 'server/db/schema.sql'), 'utf-8');
     db.exec(schema);
@@ -37,12 +42,14 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
 
     const app = createApp();
     server = http.createServer(app);
+    setupWebSocket(server);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const addr = server.address();
     baseUrl = `http://127.0.0.1:${addr.port}`;
   });
 
   after(async () => {
+    config.geniusPay.useLocalSimulator = prevSimulatorFlag;
     if (server) await new Promise((resolve) => server.close(resolve));
     if (db) db.close();
   });
@@ -332,5 +339,302 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
     const orderRow = db.prepare('SELECT status, fulfilled FROM payment_orders WHERE reference = ?').get(ref);
     assert.equal(orderRow.status, 'completed');
     assert.equal(orderRow.fulfilled, 1);
+  });
+
+  it('preserves lookingFor="everyone"/"all" and gender="nonbinary" with reciprocal matching', async () => {
+    const reg = await req('POST', '/auth/register', {
+      email: 'akissi@akwaba.ci',
+      password: 'Password123',
+      name: 'Akissi',
+      age: 27,
+      gender: 'nonbinary',
+      lookingFor: 'everyone',
+      commune: 'Cocody • Riviera',
+      city: 'Abidjan',
+    });
+    assert.equal(reg.status, 201);
+    assert.equal(reg.json.data.user.gender, 'nonbinary');
+    assert.equal(reg.json.data.user.lookingFor, 'everyone');
+
+    const akissiToken = reg.json.data.token;
+    const upd = await req('PUT', '/profiles/me', { lookingFor: 'all' }, akissiToken);
+    assert.equal(upd.status, 200);
+    assert.equal(upd.json.data.user.lookingFor, 'everyone');
+
+    const disc = await req('GET', '/profiles/discover', null, akissiToken);
+    assert.equal(disc.status, 200);
+    const ids = disc.json.data.profiles.map((p) => p.id);
+    // Aminata has looking_for='everyone', whereas Aya has looking_for='men'
+    assert.ok(ids.includes('usr_aminata'));
+    assert.ok(!ids.includes('usr_aya'));
+  });
+
+  it('exposes compatibility.breakdown, sharedQuizTraits, and trustBreakdown', async () => {
+    const disc = await req('GET', '/profiles/discover?includeSwiped=true', null, kouameToken);
+    assert.equal(disc.status, 200);
+    const aya = disc.json.data.profiles.find((p) => p.id === 'usr_aya');
+    assert.ok(aya);
+    assert.equal(aya.compatibility.breakdown.baseline, 18);
+    assert.equal(typeof aya.compatibility.breakdown.intention, 'number');
+    assert.equal(typeof aya.compatibility.breakdown.culture, 'number');
+    assert.equal(typeof aya.compatibility.breakdown.interests, 'number');
+    assert.equal(typeof aya.compatibility.breakdown.geography, 'number');
+    assert.ok(Array.isArray(aya.compatibility.sharedQuizTraits));
+    assert.ok(aya.compatibility.sharedQuizTraits.length >= 1);
+    assert.equal(aya.trustBreakdown.base, 40);
+    assert.equal(aya.trustBreakdown.verified225, 25);
+
+    const detail = await req('GET', '/profiles/usr_aya', null, kouameToken);
+    assert.equal(detail.status, 200);
+    assert.ok(detail.json.data.compatibility.breakdown);
+    assert.ok(detail.json.data.profile.trustBreakdown);
+  });
+
+  it('updates Passeport Babi dates without double-charging Cauris', async () => {
+    const before = await req('GET', '/wallet', null, kouameToken);
+    const startBal = before.json.data.user.caurisBalance;
+
+    const firstPass = await req(
+      'POST',
+      '/profiles/me/passport',
+      { active: true, targetCity: 'Abidjan', arrivalDate: '2026-12-15', departureDate: '2027-01-05' },
+      kouameToken
+    );
+    assert.equal(firstPass.status, 200);
+    assert.equal(firstPass.json.data.user.passportActive, true);
+    assert.equal(firstPass.json.data.user.passportArrivalDate, '2026-12-15');
+    assert.equal(firstPass.json.data.user.passportDepartureDate, '2027-01-05');
+    assert.equal(firstPass.json.data.user.caurisBalance, startBal - 200);
+
+    const secondPass = await req(
+      'POST',
+      '/profiles/me/passport',
+      { active: true, targetCity: 'Grand-Bassam', arrivalDate: '2026-12-20', departureDate: '2027-01-10' },
+      kouameToken
+    );
+    assert.equal(secondPass.status, 200);
+    assert.equal(secondPass.json.data.user.passportTargetCity, 'Grand-Bassam');
+    assert.equal(secondPass.json.data.user.passportArrivalDate, '2026-12-20');
+    assert.equal(secondPass.json.data.user.passportDepartureDate, '2027-01-10');
+    assert.equal(secondPass.json.data.user.caurisBalance, startBal - 200);
+  });
+
+  it('handles secure avatar upload with magic-byte validation', async () => {
+    const badAvatar = await req(
+      'POST',
+      '/profiles/me/avatar',
+      { imageBase64: 'data:image/png;base64,SGVsbG8=' },
+      kouameToken
+    );
+    assert.equal(badAvatar.status, 422);
+
+    // Valid 1x1 PNG
+    const validPng =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const goodAvatar = await req(
+      'POST',
+      '/profiles/me/avatar',
+      { imageBase64: validPng },
+      kouameToken
+    );
+    assert.equal(goodAvatar.status, 200);
+    const url = goodAvatar.json.data.avatarUrl;
+    assert.ok(url.startsWith('/uploads/avatars/'));
+    const diskPath = path.join(config.rootDir, 'public', url.replace(/^\/+/, ''));
+    assert.ok(fs.existsSync(diskPath));
+    fs.unlinkSync(diskPath);
+  });
+
+  it('supports contextual swipe reactionNote and interactive Safe Date invite + acceptance', async () => {
+    const swipeRes = await req(
+      'POST',
+      '/swipes',
+      {
+        targetId: 'usr_sarah',
+        action: 'like',
+        reactionNote: 'Team Garba bien pimenté à l’arrivée à Port-Bouët !',
+      },
+      kouameToken
+    );
+    assert.equal(swipeRes.status, 200);
+    assert.equal(swipeRes.json.data.isMatch, true);
+
+    const sarahMsgs = await req('GET', `/chats/${swipeRes.json.data.match.id}/messages`, null, kouameToken);
+    assert.equal(sarahMsgs.status, 200);
+    assert.ok(
+      sarahMsgs.json.data.messages.some((m) => m.content.includes('Team Garba bien pimenté'))
+    );
+
+    const inviteRes = await req(
+      'POST',
+      '/chats/match_kouame_aya/date-invite',
+      { spotId: 'spot_zone4_rooftop', proposedDate: 'Vendredi 19h30', note: 'On admire la lagune ?' },
+      kouameToken
+    );
+    assert.equal(inviteRes.status, 201);
+    const inviteMsg = inviteRes.json.data.message;
+    const inviteMeta = JSON.parse(inviteMsg.metadata_json);
+    assert.equal(inviteMeta.status, 'pending');
+    assert.equal(inviteMeta.note, 'On admire la lagune ?');
+    assert.equal(inviteMeta.spot.id, 'spot_zone4_rooftop');
+
+    const ayaLogin = await req('POST', '/auth/demo', { persona: 'aya' });
+    assert.equal(ayaLogin.status, 200);
+    const ayaToken = ayaLogin.json.data.token;
+
+    const respondRes = await req(
+      'POST',
+      `/chats/match_kouame_aya/messages/${inviteMsg.id}/respond-date`,
+      { decision: 'accepted' },
+      ayaToken
+    );
+    assert.equal(respondRes.status, 200);
+    const updatedMeta = JSON.parse(respondRes.json.data.inviteMessage.metadata_json);
+    assert.equal(updatedMeta.status, 'accepted');
+    assert.equal(updatedMeta.respondedBy, 'usr_aya');
+    assert.ok(respondRes.json.data.replyMessage.content.includes('accepté'));
+  });
+
+  it('delivers real-time WebSocket typing events and covers safety challenge + sandbox completion', async () => {
+    const challenge = await req('GET', '/safety/challenge', null, kouameToken);
+    assert.equal(challenge.status, 200);
+    assert.ok(challenge.json.data.breakdown);
+
+    const ayaLogin = await req('POST', '/auth/demo', { persona: 'aya' });
+    const ayaToken = ayaLogin.json.data.token;
+    const wsPort = server.address().port;
+
+    const wsK = new WebSocket(`ws://127.0.0.1:${wsPort}/ws?token=${encodeURIComponent(kouameToken)}`);
+    const wsA = new WebSocket(`ws://127.0.0.1:${wsPort}/ws?token=${encodeURIComponent(ayaToken)}`);
+
+    const eventsA = [];
+    const eventsK = [];
+
+    await Promise.all([
+      new Promise((resolve) => {
+        wsK.on('message', (d) => {
+          const msg = JSON.parse(d.toString());
+          eventsK.push(msg);
+          if (msg.type === 'connected') resolve();
+        });
+      }),
+      new Promise((resolve) => {
+        wsA.on('message', (d) => {
+          const msg = JSON.parse(d.toString());
+          eventsA.push(msg);
+          if (msg.type === 'connected') resolve();
+        });
+      }),
+    ]);
+
+    wsK.send(JSON.stringify({ type: 'ping' }));
+    wsK.send(JSON.stringify({ type: 'typing', matchId: 'match_kouame_aya', recipientId: 'usr_aya' }));
+
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.ok(eventsK.some((e) => e.type === 'pong'));
+    assert.ok(eventsA.some((e) => e.type === 'typing' && e.matchId === 'match_kouame_aya'));
+
+    wsK.close();
+    wsA.close();
+
+    // Sandbox payment completion end-to-end
+    const checkout = await req(
+      'POST',
+      '/payments/checkout',
+      { itemCode: 'cauris_250', paymentMethod: 'orange_money' },
+      kouameToken
+    );
+    assert.equal(checkout.status, 201);
+    const completed = await req(
+      'POST',
+      '/payments/sandbox/complete',
+      { reference: checkout.json.data.reference, paymentMethod: 'orange_money', outcome: 'success' },
+      kouameToken
+    );
+    assert.equal(completed.status, 200);
+    assert.equal(completed.json.data.webhookVerified, true);
+    assert.equal(completed.json.data.order.status, 'completed');
+  });
+
+  it('orchestrates non-simulated GeniusPay API checkout and status reconciliation', async () => {
+    const origFetch = globalThis.fetch;
+    const origSim = config.geniusPay.useLocalSimulator;
+    const origPub = config.geniusPay.publicKey;
+    const origSec = config.geniusPay.secretKey;
+
+    const balBefore = (await req('GET', '/wallet', null, kouameToken)).json.data.user.caurisBalance;
+
+    try {
+      config.geniusPay.useLocalSimulator = false;
+      config.geniusPay.publicKey = 'pk_sandbox_test_key';
+      config.geniusPay.secretKey = 'sk_sandbox_test_secret';
+
+      globalThis.fetch = async (url, opts) => {
+        const strUrl = String(url);
+        if (strUrl.startsWith(config.geniusPay.baseUrl)) {
+          if (strUrl.endsWith('/payments') && opts?.method === 'POST') {
+            return new Response(
+              JSON.stringify({
+                success: true,
+                message: 'Sandbox payment initiated successfully',
+                data: {
+                  id: 9001,
+                  reference: 'SANDBOX_TEST9001',
+                  amount: 500,
+                  currency: 'XOF',
+                  status: null,
+                  gateway: 'wave',
+                  checkout_url: 'https://geniuspay.ci/checkout/SANDBOX_TEST9001',
+                  environment: 'sandbox',
+                },
+              }),
+              { status: 201, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+          if (strUrl.endsWith('/payments/SANDBOX_TEST9001')) {
+            return new Response(
+              JSON.stringify({
+                success: true,
+                data: {
+                  id: 9001,
+                  reference: 'SANDBOX_TEST9001',
+                  amount: 500,
+                  currency: 'XOF',
+                  fees: 113,
+                  net_amount: 387,
+                  status: 'completed',
+                  payment_method: 'wave',
+                  environment: 'sandbox',
+                },
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+        }
+        return origFetch(url, opts);
+      };
+
+      const checkout = await req(
+        'POST',
+        '/payments/checkout',
+        { itemCode: 'cauris_250', paymentMethod: 'wave', customerPhone: '+2250708112233' },
+        kouameToken
+      );
+      assert.equal(checkout.status, 201);
+      assert.equal(checkout.json.data.simulated, false);
+      assert.equal(checkout.json.data.reference, 'SANDBOX_TEST9001');
+      assert.equal(checkout.json.data.checkoutUrl, 'https://geniuspay.ci/checkout/SANDBOX_TEST9001');
+
+      const statusRes = await req('GET', '/payments/SANDBOX_TEST9001/status', null, kouameToken);
+      assert.equal(statusRes.status, 200);
+      assert.equal(statusRes.json.data.order.status, 'completed');
+      assert.equal(statusRes.json.data.order.fulfilled, 1);
+      assert.equal(statusRes.json.data.user.caurisBalance, balBefore + 250);
+    } finally {
+      globalThis.fetch = origFetch;
+      config.geniusPay.useLocalSimulator = origSim;
+      config.geniusPay.publicKey = origPub;
+      config.geniusPay.secretKey = origSec;
+    }
   });
 });

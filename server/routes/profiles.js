@@ -17,6 +17,24 @@ import { getEffectiveSubscriptionTier, spendCauris } from '../services/monetizat
 
 const router = express.Router();
 const MAX_VOICE_BYTES = 4 * 1024 * 1024;
+const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+
+function detectImageExtension(buffer, declaredMime = '') {
+  if (!Buffer.isBuffer(buffer) || buffer.byteLength < 12) return null;
+  if (declaredMime && !/^image\/(jpeg|jpg|png|webp)$/i.test(declaredMime.trim())) {
+    return null;
+  }
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return 'png';
+  }
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'jpg';
+  }
+  if (buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return 'webp';
+  }
+  return null;
+}
 
 function isSafeAvatarUrl(url) {
   if (typeof url !== 'string') return false;
@@ -155,8 +173,9 @@ router.put('/me', requireAuth, (req, res) => {
   }
 
   const nextName = String(name ?? current.name).trim().slice(0, 80) || current.name;
-  const nextGender = gender && ['man', 'woman'].includes(gender) ? gender : current.gender;
-  const nextLooking = lookingFor && ['men', 'women', 'all'].includes(lookingFor) ? lookingFor : current.looking_for;
+  const nextGender = gender && ['man', 'woman', 'nonbinary'].includes(gender) ? gender : current.gender;
+  const normalizedLooking = lookingFor === 'all' ? 'everyone' : lookingFor;
+  const nextLooking = normalizedLooking && ['men', 'women', 'everyone'].includes(normalizedLooking) ? normalizedLooking : current.looking_for;
   const nextCommune = String(commune ?? current.commune).slice(0, 80);
   const nextCity = String(city ?? current.city).slice(0, 80);
   const isDiaspora = DIASPORA_HUBS.includes(nextCommune) || DIASPORA_HUBS.includes(nextCity) ? 1 : 0;
@@ -236,6 +255,63 @@ router.post('/me/voice', requireAuth, (req, res) => {
       voiceNoteUrl: voiceUrl,
       voiceDurationSec: updated.voice_duration_sec,
       trustScore,
+      user: formatSelfUser(updated),
+    },
+  });
+});
+
+router.post('/me/avatar', requireAuth, (req, res) => {
+  const { imageBase64 } = req.body || {};
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return res.status(422).json({
+      success: false,
+      error: { code: 'INVALID_IMAGE', message: 'Image manquante.' },
+    });
+  }
+
+  let declaredMime = '';
+  let rawBase64 = imageBase64.trim();
+  const dataUriMatch = rawBase64.match(/^data:([^;]+);base64,(.+)$/i);
+  if (dataUriMatch) {
+    declaredMime = dataUriMatch[1];
+    rawBase64 = dataUriMatch[2];
+  } else if (rawBase64.startsWith('data:')) {
+    return res.status(422).json({
+      success: false,
+      error: { code: 'INVALID_IMAGE', message: 'Format data-URI image invalide.' },
+    });
+  }
+
+  const decoded = Buffer.from(rawBase64, 'base64');
+  if (decoded.byteLength > MAX_AVATAR_BYTES) {
+    return res.status(413).json({
+      success: false,
+      error: { code: 'IMAGE_TOO_LARGE', message: 'Photo trop volumineuse (max 2 Mo).' },
+    });
+  }
+
+  const ext = detectImageExtension(decoded, declaredMime);
+  if (!ext) {
+    return res.status(422).json({
+      success: false,
+      error: { code: 'INVALID_IMAGE', message: 'Format image invalide (JPEG, PNG ou WebP uniquement).' },
+    });
+  }
+
+  const filename = `${req.user.id}_${Date.now()}_${crypto.randomInt(100, 999)}.${ext}`;
+  const uploadDir = path.join(config.rootDir, 'public/uploads/avatars');
+  fs.mkdirSync(uploadDir, { recursive: true });
+  fs.writeFileSync(path.join(uploadDir, filename), decoded);
+
+  const avatarUrl = `/uploads/avatars/${filename}`;
+  const db = getDb();
+  db.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(avatarUrl, req.user.id);
+  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+
+  return res.json({
+    success: true,
+    data: {
+      avatarUrl,
       user: formatSelfUser(updated),
     },
   });

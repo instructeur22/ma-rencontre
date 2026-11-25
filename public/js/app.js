@@ -4,7 +4,25 @@ import {
   generateDemoVoiceBase64,
   recordMicrophoneClip,
   renderVoicePlayerHtml,
+  stopActiveAudio,
 } from './audio.js';
+import { hydrateStaticIcons, iconSvg } from './icons.js';
+
+const FALLBACK_META = {
+  communes: [
+    'Cocody • Riviera',
+    'Marcory • Zone 4',
+    'Plateau',
+    'Yopougon',
+    'Bingerville',
+    'Koumassi',
+    'Treichville',
+    'Port-Bouët',
+    'Abobo',
+  ],
+  cities: ['Abidjan', 'Grand-Bassam', 'Assinie', 'Yamoussoukro', 'Bouaké', 'San-Pédro', 'Korhogo', 'Daloa'],
+  diasporaHubs: ['Paris • Île-de-France', 'Lyon', 'Bruxelles', 'Montréal', 'Londres', 'Genève', 'Washington DC'],
+};
 
 const state = {
   user: null,
@@ -12,6 +30,8 @@ const state = {
   catalog: null,
   discoverProfiles: [],
   discoverIndex: 0,
+  voiceFirstMode: false,
+  unlockedVoiceIds: new Set(),
   matches: [],
   admirersData: { admirers: [], isVip: false, revealCostCauris: 120 },
   spots: [],
@@ -25,8 +45,9 @@ const state = {
   activeView: 'discover',
   likesTab: 'matches',
   dmTargetProfile: null,
+  reactionContext: null,
   gpContext: {
-    mode: 'store', // 'store' or 'booking'
+    mode: 'store',
     itemCode: null,
     itemTitle: '',
     amountXof: 0,
@@ -36,6 +57,8 @@ const state = {
   },
   activeRecorder: null,
   selfieStream: null,
+  typingTimer: null,
+  lastTypingSentAt: 0,
 };
 
 function escapeHtml(str) {
@@ -47,6 +70,13 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+function formatMoodLabel(rawMood) {
+  const clean = String(rawMood || 'Disponible pour échanger')
+    .replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\u2600-\u27BF\uFE0F\s]+/gu, '')
+    .trim();
+  return clean || 'Disponible pour échanger';
+}
+
 function showToast(msg) {
   const stack = document.getElementById('toast-stack');
   while (stack.children.length >= 2) {
@@ -56,7 +86,11 @@ function showToast(msg) {
   item.className = 'toast-item';
   item.textContent = msg;
   stack.appendChild(item);
-  setTimeout(() => item.remove(), 2600);
+  requestAnimationFrame(() => item.classList.add('visible'));
+  setTimeout(() => {
+    item.classList.remove('visible');
+    setTimeout(() => item.remove(), 220);
+  }, 2600);
 }
 
 function formatXof(n) {
@@ -70,24 +104,81 @@ function formatTimeShort(iso) {
   return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
 
+function resolveCityFromCommune(commune) {
+  const meta = state.meta || FALLBACK_META;
+  if (meta.communes.includes(commune)) return 'Abidjan';
+  if (commune === 'Paris • Île-de-France') return 'Paris';
+  return commune;
+}
+
+function populateCommuneSelect(selectId, includeAllOption = false, currentValue = '') {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const meta = state.meta || FALLBACK_META;
+  const prev = currentValue || sel.value;
+
+  const groups = [
+    { label: 'Abidjan par communes', items: meta.communes || [] },
+    { label: 'Côte d’Ivoire', items: (meta.cities || []).filter((c) => c !== 'Abidjan') },
+    { label: 'Hubs Diaspora', items: meta.diasporaHubs || [] },
+  ];
+
+  let html = includeAllOption ? '<option value="all">Toute la CI &amp; Diaspora</option>' : '';
+  for (const g of groups) {
+    html += `<optgroup label="${escapeHtml(g.label)}">`;
+    for (const item of g.items) {
+      html += `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`;
+    }
+    html += '</optgroup>';
+  }
+  sel.innerHTML = html;
+  if (prev && [...sel.options].some((o) => o.value === prev)) {
+    sel.value = prev;
+  }
+}
+
+function populateAllLocationSelects() {
+  populateCommuneSelect('reg-commune', false, 'Cocody • Riviera');
+  populateCommuneSelect('filter-commune', true, 'all');
+  populateCommuneSelect('edit-commune', false, state.user?.commune || 'Cocody • Riviera');
+}
+
 function updateTopbarUser() {
   const u = state.user;
   if (!u) return;
   document.getElementById('header-cauris').textContent = u.caurisBalance;
-  document.getElementById('header-commune-pill').textContent = u.passportActive && u.passportTargetCity
-    ? `✈ Passeport : ${u.passportTargetCity}`
-    : u.commune;
+  const pill = document.getElementById('header-commune-pill');
+  if (u.passportActive && u.passportTargetCity) {
+    pill.innerHTML = `${iconSvg('plane', 'ak-ico-xs')} <span>Passeport : ${escapeHtml(u.passportTargetCity)}</span>`;
+  } else {
+    pill.textContent = u.commune;
+  }
 
   const incogBtn = document.getElementById('btn-header-incognito');
   incogBtn.textContent = u.incognito ? 'Incognito' : 'Visible';
   incogBtn.classList.toggle('incognito-on', Boolean(u.incognito));
 
-  document.getElementById('nav-likes-count').textContent =
-    state.matches.length + state.admirersData.admirers.length;
-  document.getElementById('nav-chat-count').textContent = state.matches.length;
+  const likesCount = state.matches.length + state.admirersData.admirers.length;
+  const unreadTotal = state.matches.reduce((sum, m) => sum + Number(m.unreadCount || 0), 0);
+  const chatBadgeVal = unreadTotal > 0 ? unreadTotal : state.matches.length;
+
+  document.getElementById('nav-likes-count').textContent = likesCount;
+  document.getElementById('nav-chat-count').textContent = chatBadgeVal;
+
+  const mLikes = document.getElementById('m-nav-likes-count');
+  const mChat = document.getElementById('m-nav-chat-count');
+  if (mLikes) {
+    mLikes.textContent = likesCount;
+    mLikes.classList.toggle('hidden', likesCount === 0);
+  }
+  if (mChat) {
+    mChat.textContent = chatBadgeVal;
+    mChat.classList.toggle('hidden', chatBadgeVal === 0);
+  }
 }
 
 function switchView(viewName) {
+  stopActiveAudio();
   state.activeView = viewName;
   document.querySelectorAll('.view').forEach((el) => el.classList.remove('active'));
   document.getElementById(`view-${viewName}`)?.classList.add('active');
@@ -111,6 +202,7 @@ async function bootstrapSession() {
   state.user = me.user;
   state.meta = me.meta;
   state.catalog = await apiFetch('/store/catalog');
+  populateAllLocationSelects();
 
   document.getElementById('auth-gate').classList.remove('active');
   document.getElementById('app-shell').classList.remove('hidden');
@@ -130,15 +222,50 @@ async function bootstrapSession() {
 
   updateTopbarUser();
   switchView(state.activeView || 'discover');
+
+  // Auto-reconcile if returning from hosted GeniusPay checkout
+  const params = new URLSearchParams(window.location.search);
+  const pendingRef = localStorage.getItem('akwaba_pending_gp_ref');
+  if (pendingRef && (params.get('payment') === 'success' || params.get('ref') || params.get('booking'))) {
+    apiFetch(`/payments/${encodeURIComponent(pendingRef)}/status`)
+      .then((res) => {
+        if (res.order?.status === 'completed' || res.order?.fulfilled) {
+          localStorage.removeItem('akwaba_pending_gp_ref');
+          state.user = res.user;
+          updateTopbarUser();
+          showToast(`Paiement GeniusPay confirmé ! ${res.grantedSummary || ''}`);
+          switchView(params.get('booking') ? 'dates' : 'store');
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+function showRemoteTypingIndicator(matchId) {
+  const match = state.matches.find((m) => m.id === matchId);
+  const el = document.getElementById('chat-typing-indicator');
+  const label = document.getElementById('chat-typing-label');
+  if (!el || !label) return;
+  label.textContent = `${match?.partner?.name || 'Votre match'} est en train d'écrire...`;
+  el.classList.remove('hidden');
+  clearTimeout(state.typingTimer);
+  state.typingTimer = setTimeout(() => {
+    el.classList.add('hidden');
+  }, 2600);
 }
 
 function handleRealtimeEvent(evt) {
   if (evt.type === 'message') {
     if (state.activeView === 'chat' && evt.matchId === state.activeMatchId) {
+      document.getElementById('chat-typing-indicator')?.classList.add('hidden');
       loadConversation(state.activeMatchId);
     } else {
       showToast('Nouveau message reçu dans votre Salon Privé');
       refreshCounts();
+    }
+  } else if (evt.type === 'typing') {
+    if (state.activeView === 'chat' && evt.matchId === state.activeMatchId) {
+      showRemoteTypingIndicator(evt.matchId);
     }
   } else if (evt.type === 'match') {
     showToast(`Nouveau match avec ${evt.partner?.name || 'un membre'} !`);
@@ -149,6 +276,7 @@ function handleRealtimeEvent(evt) {
       state.user = me.user;
       updateTopbarUser();
       if (state.activeView === 'store') loadStoreAndWallet();
+      if (state.activeView === 'dates') loadDatesAndTonight();
     });
   }
 }
@@ -190,7 +318,10 @@ async function loadDiscover(includeSwiped = false) {
 
   const passportEl = document.getElementById('passport-status-text');
   if (state.user?.passportActive && state.user?.passportTargetCity) {
-    passportEl.textContent = `Actif vers ${state.user.passportTargetCity} (${state.user.passportArrivalDate || 'Dates flexibles'})`;
+    const datesTxt = state.user.passportArrivalDate
+      ? `${state.user.passportArrivalDate}${state.user.passportDepartureDate ? ` → ${state.user.passportDepartureDate}` : ''}`
+      : 'Dates flexibles';
+    passportEl.textContent = `Actif vers ${state.user.passportTargetCity} (${datesTxt})`;
   } else {
     passportEl.textContent = 'Indiquez vos dates de venue à Abidjan pour matcher avant le vol.';
   }
@@ -198,13 +329,94 @@ async function loadDiscover(includeSwiped = false) {
   renderDiscoverCard();
 }
 
+function attachCardDragGesture(card, profile) {
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+  let startTime = 0;
+  let activePointerId = null;
+
+  const stampLike = card.querySelector('.stamp-like');
+  const stampPass = card.querySelector('.stamp-pass');
+  const stampSuper = card.querySelector('.stamp-super');
+
+  const resetVisual = () => {
+    card.style.transition = 'transform 280ms var(--ease-spring), opacity 220ms ease-out';
+    card.style.transform = '';
+    if (stampLike) stampLike.style.opacity = '0';
+    if (stampPass) stampPass.style.opacity = '0';
+    if (stampSuper) stampSuper.style.opacity = '0';
+  };
+
+  card.addEventListener('pointerdown', (e) => {
+    if (isDragging) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    if (e.target.closest('button, .voice-play-bar, a, input')) return;
+
+    isDragging = true;
+    activePointerId = e.pointerId;
+    startX = e.clientX;
+    startY = e.clientY;
+    startTime = Date.now();
+    card.style.transition = 'none';
+    card.setPointerCapture?.(e.pointerId);
+  });
+
+  card.addEventListener('pointermove', (e) => {
+    if (!isDragging || e.pointerId !== activePointerId) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    card.style.transform = `translate3d(${dx}px, ${dy * 0.45}px, 0) rotate(${dx * 0.045}deg)`;
+
+    const isUpward = dy < -28 && Math.abs(dx) < 70;
+    if (stampLike) stampLike.style.opacity = !isUpward && dx > 12 ? String(Math.min(1, dx / 95)) : '0';
+    if (stampPass) stampPass.style.opacity = !isUpward && dx < -12 ? String(Math.min(1, -dx / 95)) : '0';
+    if (stampSuper) stampSuper.style.opacity = isUpward ? String(Math.min(1, -dy / 85)) : '0';
+  });
+
+  const finishDrag = (e) => {
+    if (!isDragging || e.pointerId !== activePointerId) return;
+    isDragging = false;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    const elapsed = Math.max(1, Date.now() - startTime);
+    const velocity = Math.abs(dx) / elapsed;
+
+    if (dx > 105 || (dx > 45 && velocity > 0.35)) {
+      performSwipe('like');
+    } else if (dx < -105 || (dx < -45 && velocity > 0.35)) {
+      performSwipe('pass');
+    } else if (dy < -95 && Math.abs(dx) < 80) {
+      performSwipe('super_like');
+    } else {
+      resetVisual();
+    }
+  };
+
+  card.addEventListener('pointerup', finishDrag);
+  card.addEventListener('pointercancel', finishDrag);
+}
+
+function openReactionModal(profile, quotedText, suggestedReply) {
+  if (!profile) return;
+  state.reactionContext = { profile };
+  document.getElementById('reaction-modal-title').textContent = `Réagir au profil de ${profile.name}`;
+  document.getElementById('react-trait-quote').textContent = `"${quotedText}"`;
+  document.getElementById('react-note-input').value = suggestedReply;
+  document.getElementById('reaction-modal').classList.add('active');
+}
+
 function renderDiscoverCard() {
   const host = document.getElementById('discover-card-host');
   const insights = document.getElementById('discover-insights-col');
+  const remaining = Math.max(0, state.discoverProfiles.length - state.discoverIndex);
+  const countEl = document.getElementById('discover-online-count');
+  if (countEl) countEl.textContent = remaining;
 
   if (state.discoverProfiles.length === 0 || state.discoverIndex >= state.discoverProfiles.length) {
     host.innerHTML = `
-      <div class="surface-card panel-pad" style="height:550px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:0.85rem;">
+      <div class="surface-card panel-pad empty-deck-card">
+        <span class="empty-deck-ico">${iconSvg('compass', 'ak-ico-lg')}</span>
         <h3 class="editorial-h2">Vous avez fait le tour de cette sélection</h3>
         <p class="muted-text">Élargissez la commune ou réexplorez tous les profils disponibles.</p>
         <button id="btn-reexplore-all" class="btn-primary" type="button">Réexplorer les profils</button>
@@ -219,42 +431,83 @@ function renderDiscoverCard() {
   }
 
   const p = state.discoverProfiles[state.discoverIndex];
+  const nextP = state.discoverProfiles[state.discoverIndex + 1];
   const score = p.compatibility?.score || 82;
   const reasons = p.compatibility?.reasons || [];
+  const breakdown = p.compatibility?.breakdown || { intention: 20, culture: 16, interests: 8, geography: 6 };
+  const isVoiceMasked = Boolean(state.voiceFirstMode && p.voiceNoteUrl && !state.unlockedVoiceIds.has(p.id));
+
+  const nextCardHtml = nextP
+    ? `
+      <div class="hero-card-next" aria-hidden="true">
+        <img class="hero-card-img ${state.voiceFirstMode && nextP.voiceNoteUrl && !state.unlockedVoiceIds.has(nextP.id) ? 'voice-masked' : ''}" src="${escapeHtml(nextP.avatarUrl)}" alt="" />
+        <div class="hero-card-scrim"></div>
+      </div>
+    `
+    : '';
 
   host.innerHTML = `
-    <article id="active-hero-card" class="profile-hero-card">
-      <img class="hero-card-img" src="${escapeHtml(p.avatarUrl)}" alt="${escapeHtml(p.name)}" />
-      <div class="hero-card-scrim"></div>
-      <div class="hero-top-row">
-        <span class="verified-badge">
-          ${p.verified225 ? '✓ Vérifié 225' : 'Membre'} • Confiance ${p.trustScore}/100
-        </span>
-        <span class="compat-pill">${score}% Alchimie</span>
-      </div>
-      <div class="hero-card-body">
-        <h3 class="hero-name">${escapeHtml(p.name)}, ${p.age}</h3>
-        <p class="hero-loc">
-          ${escapeHtml(p.commune)} • ${escapeHtml(p.profession || p.city)}
-          ${p.passportActive && p.passportTargetCity ? ` • ✈ Bientôt à ${escapeHtml(p.passportTargetCity)}` : ''}
-        </p>
-        <span class="hero-intention-tag">${escapeHtml(p.intention)}</span>
-        <p class="hero-bio">${escapeHtml(p.bio)}</p>
-        ${renderVoicePlayerHtml(p.voiceNoteUrl, p.voiceDurationSec, false, `Voix de ${p.name}`)}
-        <div class="tag-row">
-          ${(p.tags || []).slice(0, 4).map((t) => `<span class="mini-tag">#${escapeHtml(t)}</span>`).join('')}
+    <div class="card-stack-stage">
+      ${nextCardHtml}
+      <article id="active-hero-card" class="profile-hero-card" data-profile-id="${escapeHtml(p.id)}">
+        <img class="hero-card-img ${isVoiceMasked ? 'voice-masked' : ''}" src="${escapeHtml(p.avatarUrl)}" alt="${escapeHtml(p.name)}" />
+        <div class="hero-card-scrim"></div>
+
+        <div class="swipe-stamp stamp-like">J'AIME</div>
+        <div class="swipe-stamp stamp-pass">PASSER</div>
+        <div class="swipe-stamp stamp-super">COUP DE CŒUR</div>
+
+        ${
+          isVoiceMasked
+            ? `<div id="voice-mystery-pill" class="voice-mystery-pill">
+                 ${iconSvg('mic', 'ak-ico-sm')}
+                 <span>Coup de Foudre Vocal : écoutez 1,5 s pour révéler la photo</span>
+               </div>`
+            : ''
+        }
+
+        <div class="hero-top-row">
+          <span class="verified-badge">
+            ${p.onlineStatus ? '<span class="pulse-dot" aria-hidden="true"></span>' : ''}
+            ${p.verified225 ? iconSvg('shieldCheck', 'ak-ico-xs') : ''}
+            <span>${p.verified225 ? 'Vérifié 225' : 'Membre'} • ${p.trustScore}/100</span>
+          </span>
+          <span class="compat-pill">${score}% Alchimie</span>
         </div>
-      </div>
-    </article>
+
+        <div class="hero-card-body">
+          <h3 class="hero-name">${escapeHtml(p.name)}, ${p.age}</h3>
+          <p class="hero-loc">
+            ${escapeHtml(p.commune)} • ${escapeHtml(p.profession || p.city)}
+            ${p.passportActive && p.passportTargetCity ? ` • Passeport vers ${escapeHtml(p.passportTargetCity)}` : ''}
+          </p>
+          <span class="hero-intention-tag">${escapeHtml(p.intention)}</span>
+          <p class="hero-bio">${escapeHtml(p.bio)}</p>
+          ${renderVoicePlayerHtml(p.voiceNoteUrl, p.voiceDurationSec, false, `Voix de ${p.name}`, p.id)}
+          <div class="tag-row">
+            ${(p.tags || []).slice(0, 4).map((t) => `<span class="mini-tag">#${escapeHtml(t)}</span>`).join('')}
+          </div>
+        </div>
+      </article>
+    </div>
   `;
 
   bindVoicePlayers(host);
+  const heroCard = document.getElementById('active-hero-card');
+  if (heroCard) attachCardDragGesture(heroCard, p);
 
   const quiz = p.vraiBabi || {};
+  const tb = p.trustBreakdown || {};
   insights.innerHTML = `
     <div class="insight-block">
       <div class="panel-title-row">
         <h3>Pourquoi vous matchez (${score}%)</h3>
+      </div>
+      <div class="compat-bars">
+        <div class="compat-bar-row"><span>Intention</span><div class="mini-meter"><div style="width:${Math.round((breakdown.intention / 30) * 100)}%"></div></div><strong>${breakdown.intention}/30</strong></div>
+        <div class="compat-bar-row"><span>Culture Babi</span><div class="mini-meter"><div style="width:${Math.round((breakdown.culture / 32) * 100)}%"></div></div><strong>${breakdown.culture}/32</strong></div>
+        <div class="compat-bar-row"><span>Intérêts</span><div class="mini-meter"><div style="width:${Math.round((breakdown.interests / 12) * 100)}%"></div></div><strong>${breakdown.interests}/12</strong></div>
+        <div class="compat-bar-row"><span>Zone 225</span><div class="mini-meter"><div style="width:${Math.round((breakdown.geography / 8) * 100)}%"></div></div><strong>${breakdown.geography}/8</strong></div>
       </div>
       <ul class="reason-list">
         ${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}
@@ -262,31 +515,49 @@ function renderDiscoverCard() {
     </div>
 
     <div class="insight-block">
+      <div class="panel-title-row" style="margin-bottom:0.35rem;">
+        <p class="eyebrow" style="margin:0;">Bouclier Babi • ${p.trustScore}/100</p>
+      </div>
+      <div class="trust-breakdown-pills">
+        ${tb.verified225 ? '<span class="trust-chip ok">Selfie 225 ✓</span>' : ''}
+        ${tb.phoneVerified ? '<span class="trust-chip ok">Tél +225/Intl ✓</span>' : ''}
+        ${tb.voiceBio ? '<span class="trust-chip ok">Voix authentifiée ✓</span>' : ''}
+        ${tb.completeProfile ? '<span class="trust-chip ok">Profil complet ✓</span>' : ''}
+      </div>
+    </div>
+
+    <div class="insight-block">
       <p class="eyebrow">Envie du soir</p>
-      <p style="font-weight:600;font-size:0.9rem;">${escapeHtml(p.tonightMood || 'Disponible pour échanger')}</p>
+      <p class="inline-icon-label" style="font-weight:600;font-size:0.9rem;">
+        ${iconSvg('spark', 'ak-ico-xs')}
+        <span>${escapeHtml(formatMoodLabel(p.tonightMood))}</span>
+      </p>
     </div>
 
     ${
       p.secretPrompt
         ? `<div class="insight-block">
-            <p class="eyebrow">Ce qui me fait craquer</p>
+            <div class="panel-title-row" style="margin-bottom:0.35rem;">
+              <p class="eyebrow" style="margin:0;">Ce qui me fait craquer</p>
+              <button class="btn-text react-trigger" type="button" data-quote="${escapeHtml(p.secretPrompt)}" data-suggest="Ton secret m'a fait sourire ! ${escapeHtml(p.name)}, on en parle ?">Réagir</button>
+            </div>
             <div class="secret-quote">"${escapeHtml(p.secretPrompt)}"</div>
           </div>`
         : ''
     }
 
     <div class="insight-block">
-      <p class="eyebrow">Profil Vrai Babi</p>
+      <p class="eyebrow">Profil Vrai Babi (cliquez pour réagir)</p>
       <div class="quiz-mini-grid">
-        <div class="quiz-mini-cell"><span>Plat</span>${escapeHtml(quiz.dish || 'À découvrir')}</div>
-        <div class="quiz-mini-cell"><span>Musique</span>${escapeHtml(quiz.music || 'À découvrir')}</div>
-        <div class="quiz-mini-cell"><span>Sortie</span>${escapeHtml(quiz.outing || 'À découvrir')}</div>
-        <div class="quiz-mini-cell"><span>Vision</span>${escapeHtml(quiz.family_vision || 'À découvrir')}</div>
+        <button type="button" class="quiz-mini-cell quiz-react-btn" data-quote="${escapeHtml(quiz.dish || 'Attiéké')}" data-suggest="Team ${escapeHtml(quiz.dish || 'Attiéké')} aussi ! Tu as une bonne adresse à Abidjan ?"><span>Plat</span>${escapeHtml(quiz.dish || 'À découvrir')}</button>
+        <button type="button" class="quiz-mini-cell quiz-react-btn" data-quote="${escapeHtml(quiz.music || 'Zouglou')}" data-suggest="Ta bande-son ${escapeHtml(quiz.music || '')} valide tout sur le pont HKB !"><span>Musique</span>${escapeHtml(quiz.music || 'À découvrir')}</button>
+        <button type="button" class="quiz-mini-cell quiz-react-btn" data-quote="${escapeHtml(quiz.outing || 'Cocody')}" data-suggest="Totalement partant(e) pour : ${escapeHtml(quiz.outing || 'un Safe Date')} !"><span>Sortie</span>${escapeHtml(quiz.outing || 'À découvrir')}</button>
+        <button type="button" class="quiz-mini-cell quiz-react-btn" data-quote="${escapeHtml(quiz.family_vision || 'Complices')}" data-suggest="J'aime beaucoup ta vision (${escapeHtml(quiz.family_vision || '')})."><span>Vision</span>${escapeHtml(quiz.family_vision || 'À découvrir')}</button>
       </div>
     </div>
 
     <div class="insight-block">
-      <p class="eyebrow">Brise-glace direct (100 Cauris)</p>
+      <p class="eyebrow">DM Direct avant match (100 Cauris)</p>
       <button class="icebreaker-btn" data-quick-dm="Salut ${escapeHtml(p.name)} ! Votre profil à ${escapeHtml(p.commune)} m'a tout de suite parlé. On discute ?">
         "Salut ${escapeHtml(p.name)} ! Votre profil à ${escapeHtml(p.commune)} m'a parlé..."
       </button>
@@ -296,6 +567,12 @@ function renderDiscoverCard() {
     </div>
   `;
 
+  insights.querySelectorAll('.react-trigger, .quiz-react-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      openReactionModal(p, btn.dataset.quote, btn.dataset.suggest);
+    });
+  });
+
   insights.querySelectorAll('.icebreaker-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       openDirectMessageModal(p, btn.dataset.quickDm);
@@ -303,21 +580,26 @@ function renderDiscoverCard() {
   });
 }
 
-async function performSwipe(action) {
+async function performSwipe(action, reactionNote = '') {
   const p = state.discoverProfiles[state.discoverIndex];
   if (!p) return;
 
+  stopActiveAudio();
   const card = document.getElementById('active-hero-card');
   if (card) {
+    card.style.transition = '';
+    card.style.transform = '';
     if (action === 'pass') card.classList.add('anim-left');
     if (action === 'like') card.classList.add('anim-right');
     if (action === 'super_like') card.classList.add('anim-up');
   }
 
   try {
+    const payload = { targetId: p.id, action };
+    if (reactionNote) payload.reactionNote = reactionNote;
     const res = await apiFetch('/swipes', {
       method: 'POST',
-      body: JSON.stringify({ targetId: p.id, action }),
+      body: JSON.stringify(payload),
     });
     if (res.caurisBalance !== undefined) {
       state.user.caurisBalance = res.caurisBalance;
@@ -333,7 +615,9 @@ async function performSwipe(action) {
       } else if (action === 'pass') {
         showToast(`${p.name} passé(e)`);
       } else if (action === 'super_like') {
-        showToast(`Super Coup de Cœur envoyé à ${p.name} ★`);
+        showToast(`Super Coup de Cœur envoyé à ${p.name}`);
+      } else if (reactionNote) {
+        showToast(`Like + réaction envoyés à ${p.name}`);
       }
     }, 240);
   } catch (err) {
@@ -382,8 +666,38 @@ async function loadDatesAndTonight() {
 
   const moodSel = document.getElementById('my-tonight-mood');
   if (state.user?.tonightMood) {
-    const matchOpt = [...moodSel.options].find((o) => o.value === state.user.tonightMood);
-    if (matchOpt) moodSel.value = state.user.tonightMood;
+    const cleanMood = state.user.tonightMood.replace(/^[^\p{L}\p{N}]+/u, '').trim();
+    const matchOpt = [...moodSel.options].find(
+      (o) => o.value === state.user.tonightMood || o.value === cleanMood
+    );
+    if (matchOpt) moodSel.value = matchOpt.value;
+  }
+
+  const bookingsSection = document.getElementById('my-bookings-section');
+  const bookingsList = document.getElementById('my-bookings-list');
+  if (state.myBookings.length > 0) {
+    bookingsSection.classList.remove('hidden');
+    bookingsList.innerHTML = state.myBookings
+      .map(
+        (b) => `
+        <article class="booking-card surface-card">
+          <div class="booking-top">
+            <strong>${escapeHtml(b.spot_name)}</strong>
+            <span class="status-chip ${b.status === 'confirmed' ? '' : 'pending-chip'}">
+              ${b.status === 'confirmed' ? 'Confirmé ✓' : 'En attente'}
+            </span>
+          </div>
+          <p class="small muted-text">${escapeHtml(b.spot_commune)} • ${escapeHtml(b.booking_date)} (${b.guests_count} pers.)</p>
+          <div class="booking-foot">
+            <code>${escapeHtml(b.payment_reference)}</code>
+            <strong>${formatXof(b.total_xof)}</strong>
+          </div>
+        </article>
+      `
+      )
+      .join('');
+  } else {
+    bookingsSection.classList.add('hidden');
   }
 
   const spotsGrid = document.getElementById('safe-spots-grid');
@@ -425,13 +739,17 @@ async function loadDatesAndTonight() {
       <article class="member-card">
         <div class="member-img-box">
           <img src="${escapeHtml(p.avatarUrl)}" alt="${escapeHtml(p.name)}" />
+          ${p.onlineStatus ? '<span class="card-online-badge"><span class="pulse-dot"></span> En ligne</span>' : ''}
         </div>
         <div class="card-inner-pad">
           <div class="card-meta-line">
             <strong>${escapeHtml(p.name)}, ${p.age}</strong>
             <span>${p.compatibility?.score || 85}% alchimie</span>
           </div>
-          <p class="small" style="color:var(--terracotta-deep);font-weight:600;">${escapeHtml(p.tonightMood)}</p>
+          <p class="small inline-icon-label" style="color:var(--terracotta-deep);font-weight:600;">
+            ${iconSvg('spark', 'ak-ico-xs')}
+            <span>${escapeHtml(formatMoodLabel(p.tonightMood))}</span>
+          </p>
           <p class="muted-text small">${escapeHtml(p.commune)}</p>
           <button class="btn-secondary btn-invite-tonight" data-user-id="${escapeHtml(p.id)}" type="button">
             Proposer une sortie (DM Direct)
@@ -470,6 +788,7 @@ async function loadLikesAndMatches() {
         <article class="member-card">
           <div class="member-img-box">
             <img src="${escapeHtml(m.partner.avatarUrl)}" alt="${escapeHtml(m.partner.name)}" />
+            ${m.partner.onlineStatus ? '<span class="card-online-badge"><span class="pulse-dot"></span> En ligne</span>' : ''}
           </div>
           <div class="card-inner-pad">
             <div class="card-meta-line">
@@ -510,7 +829,7 @@ async function loadLikesAndMatches() {
           <div class="card-inner-pad">
             <div class="card-meta-line">
               <strong>${escapeHtml(p.name)}, ${p.age}</strong>
-              <span>${a.action === 'super_like' ? '★ Super Cœur' : '♥ A aimé'}</span>
+              <span>${a.action === 'super_like' ? 'Super Cœur ★' : 'A aimé ♥'}</span>
             </div>
             <p class="muted-text small">${escapeHtml(p.commune)} • ${escapeHtml(p.intention)}</p>
             ${
@@ -579,7 +898,9 @@ async function loadChatWorkspace() {
         <div class="thread-meta">
           <div class="thread-name">
             <span>${escapeHtml(m.partner.name)}</span>
-            <span class="small muted-text">${m.compatibilityScore}%</span>
+            <span class="thread-right-meta">
+              ${m.unreadCount > 0 ? `<span class="count-chip">${m.unreadCount}</span>` : `<span class="small muted-text">${m.compatibilityScore}%</span>`}
+            </span>
           </div>
           <div class="thread-preview">${escapeHtml(m.lastMessage?.content || 'Démarrez l’échange...')}</div>
         </div>
@@ -602,11 +923,18 @@ async function loadChatWorkspace() {
 function renderGiftsDrawer() {
   const drawer = document.getElementById('chat-gifts-drawer');
   const gifts = state.catalog?.culturalGifts || [];
+  const giftIcons = {
+    rose_abidjan: 'heart',
+    bissap_frais: 'gift',
+    cacao_grand_cru: 'spark',
+    escapade_assinie: 'sun',
+  };
   drawer.innerHTML = gifts
     .map(
       (g) => `
       <button class="gift-pill-btn" data-gift-code="${escapeHtml(g.code)}" type="button">
-        ${g.emoji} ${escapeHtml(g.name)} (${g.costCauris} 🐚)
+        ${iconSvg(giftIcons[g.code] || 'gift', 'ak-ico-xs')}
+        <span>${escapeHtml(g.name)} (${g.costCauris} ${iconSvg('cauris', 'ak-ico-xs')})</span>
       </button>
     `
     )
@@ -633,6 +961,47 @@ function renderGiftsDrawer() {
   });
 }
 
+function renderDateInviteBubble(m, isMe) {
+  let meta = {};
+  try {
+    meta = JSON.parse(m.metadata_json || '{}');
+  } catch {
+    meta = {};
+  }
+  const spot = meta.spot || {};
+  const status = meta.status || 'pending';
+  const statusBadge =
+    status === 'accepted'
+      ? '<span class="status-chip">Accepté ✓</span>'
+      : status === 'declined'
+      ? '<span class="status-chip pending-chip">À replanifier</span>'
+      : '<span class="status-chip pending-chip">En attente</span>';
+
+  const actionBtns =
+    status === 'pending' && !isMe
+      ? `<div class="date-invite-actions">
+           <button type="button" class="btn-primary btn-respond-date" data-msg-id="${escapeHtml(m.id)}" data-decision="accepted">Accepter ce Safe Date ✓</button>
+           <button type="button" class="btn-secondary btn-respond-date" data-msg-id="${escapeHtml(m.id)}" data-decision="declined">Autre créneau</button>
+         </div>`
+      : '';
+
+  return `
+    <div class="date-invite-card">
+      ${spot.image_url ? `<img class="date-invite-thumb" src="${escapeHtml(spot.image_url)}" alt="${escapeHtml(spot.name || 'Safe Date')}" />` : ''}
+      <div class="date-invite-body">
+        <div class="date-invite-head">
+          <strong>${iconSvg('mapPin', 'ak-ico-xs')} ${escapeHtml(spot.name || m.content)}</strong>
+          ${statusBadge}
+        </div>
+        <p class="small">${escapeHtml(spot.commune || '')} • <strong>${escapeHtml(meta.proposedDate || '')}</strong></p>
+        ${meta.note ? `<p class="small muted-text">"${escapeHtml(meta.note)}"</p>` : ''}
+        ${spot.perk_akwaba ? `<p class="small" style="color:var(--lagoon);">${escapeHtml(spot.perk_akwaba)}</p>` : ''}
+        ${actionBtns}
+      </div>
+    </div>
+  `;
+}
+
 async function loadConversation(matchId) {
   const match = state.matches.find((m) => m.id === matchId);
   if (!match) return;
@@ -643,7 +1012,10 @@ async function loadConversation(matchId) {
       <img src="${escapeHtml(match.partner.avatarUrl)}" alt="${escapeHtml(match.partner.name)}" style="width:42px;height:42px;border-radius:50%;object-fit:cover;" />
       <div>
         <strong>${escapeHtml(match.partner.name)}, ${match.partner.age}</strong>
-        <p class="small muted-text">${escapeHtml(match.partner.commune)} • ${match.partner.verified225 ? '✓ Vérifié 225' : 'Membre'}</p>
+        <p class="small muted-text">
+          ${match.partner.onlineStatus ? '<span class="pulse-dot" aria-hidden="true"></span> En ligne • ' : ''}
+          ${escapeHtml(match.partner.commune)} • ${match.partner.verified225 ? 'Vérifié 225 ✓' : 'Membre'}
+        </p>
       </div>
     </div>
     <button id="btn-report-partner" class="btn-text" type="button" style="color:#991B1B;">Signaler / Bloquer</button>
@@ -682,6 +1054,24 @@ async function loadConversation(matchId) {
           dur = 4;
         }
         bodyHtml = renderVoicePlayerHtml(m.media_url, dur, !isMe, 'Vocal');
+      } else if (m.msg_type === 'date_invite') {
+        bodyHtml = renderDateInviteBubble(m, isMe);
+      } else if (m.msg_type === 'gift') {
+        let gift = {};
+        try {
+          gift = JSON.parse(m.metadata_json || '{}');
+        } catch {
+          gift = {};
+        }
+        const cleanGiftText = String(m.content || '')
+          .replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\u2600-\u27BF\uFE0F\s]+/gu, '')
+          .trim();
+        bodyHtml = `
+          <div class="gift-bubble-inner">
+            <strong class="inline-icon-label">${iconSvg('gift', 'ak-ico-sm')} <span>${escapeHtml(gift.name || 'Cadeau culturel AKWABA')}</span></strong>
+            <p class="small" style="margin-top:0.25rem;">${escapeHtml(gift.message || cleanGiftText)}</p>
+          </div>
+        `;
       }
 
       return `
@@ -694,8 +1084,48 @@ async function loadConversation(matchId) {
     })
     .join('');
 
+  stream.querySelectorAll('.btn-respond-date').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await apiFetch(`/chats/${matchId}/messages/${btn.dataset.msgId}/respond-date`, {
+          method: 'POST',
+          body: JSON.stringify({ decision: btn.dataset.decision }),
+        });
+        showToast(btn.dataset.decision === 'accepted' ? 'Safe Date confirmé !' : 'Réponse envoyée.');
+        await loadConversation(matchId);
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+  });
+
   bindVoicePlayers(stream);
   stream.scrollTop = stream.scrollHeight;
+  refreshCounts();
+}
+
+async function openSafeDateModal() {
+  if (!state.activeMatchId) return;
+  if (!state.spots.length) {
+    const spotsRes = await apiFetch('/dates/spots');
+    state.spots = spotsRes.spots || [];
+    state.myBookings = spotsRes.myBookings || [];
+  }
+  const select = document.getElementById('sd-spot-select');
+  select.innerHTML = state.spots
+    .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)} — ${escapeHtml(s.commune)}</option>`)
+    .join('');
+
+  const updatePreview = () => {
+    const spot = state.spots.find((s) => s.id === select.value) || state.spots[0];
+    if (spot) {
+      document.getElementById('sd-spot-preview').textContent = `${spot.perk_akwaba} • Budget : ${spot.budget_xof}`;
+    }
+  };
+  select.onchange = updatePreview;
+  updatePreview();
+  document.getElementById('sd-note-input').value = '';
+  document.getElementById('safedate-modal').classList.add('active');
 }
 
 // ---------------- VIEW 5: STORE & GENIUSPAY ----------------
@@ -788,7 +1218,7 @@ async function loadStoreAndWallet() {
           <div class="history-row">
             <span>${escapeHtml(t.reason)}</span>
             <strong style="color:${t.tx_type === 'credit' ? 'var(--lagoon)' : 'var(--terracotta)'};">
-              ${t.tx_type === 'credit' ? '+' : '-'}${t.amount_cauris} 🐚
+              ${t.tx_type === 'credit' ? '+' : '-'}${t.amount_cauris} ${iconSvg('cauris', 'ak-ico-xs')}
             </strong>
           </div>
         `
@@ -865,6 +1295,30 @@ function renderGeniusPayModal() {
 }
 
 // ---------------- VIEW 6: PROFILE & BOUCLIER BABI ----------------
+function renderAvatarPresets(currentUrl) {
+  const host = document.getElementById('profile-avatar-presets');
+  if (!host) return;
+  const presets = state.meta?.avatarPresets || [];
+  host.innerHTML = presets
+    .map(
+      (a) => `
+      <button type="button" class="avatar-preset-btn ${a.url === currentUrl ? 'selected' : ''}" data-avatar-url="${escapeHtml(a.url)}" title="${escapeHtml(a.label)}">
+        <img src="${escapeHtml(a.url)}" alt="${escapeHtml(a.label)}" />
+      </button>
+    `
+    )
+    .join('');
+
+  host.querySelectorAll('.avatar-preset-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const url = btn.dataset.avatarUrl;
+      document.getElementById('edit-avatar-url').value = url;
+      document.getElementById('me-preview-photo').src = url;
+      host.querySelectorAll('.avatar-preset-btn').forEach((b) => b.classList.toggle('selected', b === btn));
+    });
+  });
+}
+
 async function loadProfileEditor() {
   const [meRes, safetyRes] = await Promise.all([
     apiFetch('/auth/me'),
@@ -873,20 +1327,34 @@ async function loadProfileEditor() {
   state.user = meRes.user;
   state.meta = meRes.meta;
   state.safetyChallenge = safetyRes.challenge;
+  populateCommuneSelect('edit-commune', false, state.user.commune);
   updateTopbarUser();
 
   const u = state.user;
   document.getElementById('me-preview-photo').src = u.avatarUrl;
+  document.getElementById('edit-avatar-url').value = u.avatarUrl;
+  renderAvatarPresets(u.avatarUrl);
+
   document.getElementById('me-preview-name').textContent = `${u.name}, ${u.age}`;
   document.getElementById('me-preview-meta').textContent = `${u.commune} • ${u.intention}`;
   document.getElementById('me-badges-row').innerHTML = `
-    ${u.verified225 ? '<span class="status-chip">✓ Vérifié 225</span>' : '<span class="status-chip" style="background:var(--gold-soft);color:#6B480C;">Non vérifié</span>'}
+    ${u.verified225 ? '<span class="status-chip">Vérifié 225 ✓</span>' : '<span class="status-chip pending-chip">Non vérifié</span>'}
     ${u.phoneVerified ? '<span class="status-chip">Tél vérifié</span>' : ''}
     ${u.subscriptionTier !== 'free' ? `<span class="status-chip">${escapeHtml(u.subscriptionTier)}</span>` : ''}
   `;
 
   document.getElementById('me-trust-score').textContent = `${u.trustScore}/100`;
   document.getElementById('me-trust-fill').style.width = `${u.trustScore}%`;
+
+  const bd = safetyRes.breakdown || u.trustBreakdown || {};
+  document.getElementById('me-trust-breakdown').innerHTML = `
+    <span class="trust-chip ok">Base ${bd.base || 40}</span>
+    <span class="trust-chip ${bd.phoneVerified ? 'ok' : ''}">Tél ${bd.phoneVerified ? '+15 ✓' : '+0'}</span>
+    <span class="trust-chip ${bd.selfieVerified225 ? 'ok' : ''}">Selfie 225 ${bd.selfieVerified225 ? '+25 ✓' : '+0'}</span>
+    <span class="trust-chip ${bd.voiceBio ? 'ok' : ''}">Voix ${bd.voiceBio ? '+10 ✓' : '+0'}</span>
+    <span class="trust-chip ${bd.completeProfile ? 'ok' : ''}">Profil ${bd.completeProfile ? '+10 ✓' : '+0'}</span>
+  `;
+
   document.getElementById('me-referral-code').textContent = u.referralCode;
   document.getElementById('safety-challenge-label').textContent =
     `Défi du jour : "${safetyRes.challenge.label}" — ${safetyRes.challenge.tip}`;
@@ -894,7 +1362,7 @@ async function loadProfileEditor() {
 
   const voiceHost = document.getElementById('me-voice-player-host');
   voiceHost.innerHTML = u.voiceNoteUrl
-    ? renderVoicePlayerHtml(u.voiceNoteUrl, u.voiceDurationSec, true, 'Ma bio vocale')
+    ? renderVoicePlayerHtml(u.voiceNoteUrl, u.voiceDurationSec, true, 'Ma bio vocale', u.id)
     : '<p class="muted-text small">Aucune note vocale enregistrée.</p>';
   bindVoicePlayers(voiceHost);
 
@@ -903,12 +1371,13 @@ async function loadProfileEditor() {
   document.getElementById('edit-commune').value = u.commune;
   document.getElementById('edit-intention').value = u.intention;
   document.getElementById('edit-profession').value = u.profession || '';
-  document.getElementById('edit-looking').value = u.lookingFor;
+  document.getElementById('edit-looking').value = u.lookingFor === 'all' ? 'everyone' : u.lookingFor;
   document.getElementById('edit-bio').value = u.bio;
   document.getElementById('edit-secret').value = u.secretPrompt || '';
   document.getElementById('edit-tags').value = (u.tags || []).join(', ');
   document.getElementById('edit-passport-city').value = u.passportTargetCity || '';
   document.getElementById('edit-passport-arrival').value = u.passportArrivalDate || '';
+  document.getElementById('edit-passport-departure').value = u.passportDepartureDate || '';
 
   const quizHost = document.getElementById('vrai-babi-quiz-fields');
   const questions = state.meta?.vraiBabiQuestions || [];
@@ -935,10 +1404,42 @@ async function loadProfileEditor() {
 
 // ---------------- INITIALIZE EVENT LISTENERS ----------------
 document.addEventListener('DOMContentLoaded', () => {
-  // Service Worker registration
+  hydrateStaticIcons(document);
+  populateAllLocationSelects();
+
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
+
+  // Voice-First progressive portrait unlock
+  document.addEventListener('akwaba:voice-progress', (evt) => {
+    const { profileId, currentTime, completed } = evt.detail || {};
+    if (!profileId) return;
+    if ((currentTime >= 1.5 || completed) && !state.unlockedVoiceIds.has(profileId)) {
+      state.unlockedVoiceIds.add(profileId);
+      const card = document.getElementById('active-hero-card');
+      if (card && card.dataset.profileId === profileId) {
+        const img = card.querySelector('.hero-card-img');
+        if (img && img.classList.contains('voice-masked')) {
+          img.classList.remove('voice-masked');
+          document.getElementById('voice-mystery-pill')?.classList.add('fade-out');
+          showToast('Portrait révélé après écoute vocale !');
+        }
+      }
+    }
+  });
+
+  // Modal Escape & Backdrop Close
+  document.querySelectorAll('.modal-backdrop').forEach((backdrop) => {
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) backdrop.classList.remove('active');
+    });
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('.modal-backdrop.active').forEach((m) => m.classList.remove('active'));
+    }
+  });
 
   // Auth Tabs
   document.querySelectorAll('.auth-tab').forEach((tab) => {
@@ -988,7 +1489,7 @@ document.addEventListener('DOMContentLoaded', () => {
     e.preventDefault();
     try {
       const commune = document.getElementById('reg-commune').value;
-      const city = commune.includes('•') ? (commune.startsWith('Paris') ? 'Paris' : 'Abidjan') : commune;
+      const city = resolveCityFromCommune(commune);
       const res = await apiFetch('/auth/register', {
         method: 'POST',
         body: JSON.stringify({
@@ -1044,6 +1545,17 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-header-incognito').addEventListener('click', toggleIncognito);
   document.getElementById('btn-toggle-incognito-profile').addEventListener('click', toggleIncognito);
 
+  // Voice-First toggle
+  document.getElementById('toggle-voice-first').addEventListener('change', (e) => {
+    state.voiceFirstMode = e.target.checked;
+    renderDiscoverCard();
+    showToast(
+      state.voiceFirstMode
+        ? 'Mode Coup de Foudre Vocal activé : la voix précède le visage.'
+        : 'Affichage classique des portraits rétabli.'
+    );
+  });
+
   // Discover filters & actions
   ['filter-commune', 'filter-intention', 'filter-verified', 'filter-diaspora', 'filter-online'].forEach((id) => {
     document.getElementById(id).addEventListener('change', () => loadDiscover());
@@ -1084,6 +1596,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     if (!state.user || state.activeView !== 'discover') return;
+    if (document.querySelector('.modal-backdrop.active')) return;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
     if (e.key === 'ArrowLeft') performSwipe('pass');
     if (e.key === 'ArrowRight') performSwipe('like');
@@ -1122,6 +1635,46 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Contextual Reaction Modal
+  const closeReactModal = () => document.getElementById('reaction-modal').classList.remove('active');
+  document.getElementById('btn-close-reaction-modal').addEventListener('click', closeReactModal);
+  document.getElementById('btn-react-cancel').addEventListener('click', closeReactModal);
+  document.getElementById('reaction-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const note = document.getElementById('react-note-input').value.trim();
+    if (!note) return;
+    closeReactModal();
+    await performSwipe('like', note);
+  });
+
+  // Safe Date Invite Modal
+  const closeSdModal = () => document.getElementById('safedate-modal').classList.remove('active');
+  document.getElementById('btn-close-sd-modal').addEventListener('click', closeSdModal);
+  document.getElementById('btn-sd-cancel').addEventListener('click', closeSdModal);
+  document.querySelectorAll('.sd-preset-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      document.getElementById('sd-date-input').value = chip.dataset.slot;
+    });
+  });
+  document.getElementById('safedate-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!state.activeMatchId) return;
+    const spotId = document.getElementById('sd-spot-select').value;
+    const proposedDate = document.getElementById('sd-date-input').value.trim();
+    const note = document.getElementById('sd-note-input').value.trim();
+    try {
+      await apiFetch(`/chats/${state.activeMatchId}/date-invite`, {
+        method: 'POST',
+        body: JSON.stringify({ spotId, proposedDate, note }),
+      });
+      closeSdModal();
+      await loadConversation(state.activeMatchId);
+      showToast('Invitation Safe Date envoyée !');
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
   // Tonight Mood Selector
   document.getElementById('my-tonight-mood').addEventListener('change', async (e) => {
     const res = await apiFetch('/profiles/me', {
@@ -1143,14 +1696,24 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Chat Controls
+  // Chat Controls & Typing Indicator
+  const chatInput = document.getElementById('chat-text-input');
+  chatInput.addEventListener('input', () => {
+    const now = Date.now();
+    if (now - state.lastTypingSentAt < 1800) return;
+    if (!state.activeMatchId || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+    const match = state.matches.find((m) => m.id === state.activeMatchId);
+    if (!match) return;
+    state.lastTypingSentAt = now;
+    state.ws.send(JSON.stringify({ type: 'typing', matchId: match.id, recipientId: match.partner.id }));
+  });
+
   document.getElementById('chat-send-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!state.activeMatchId) return;
-    const input = document.getElementById('chat-text-input');
-    const content = input.value.trim();
+    const content = chatInput.value.trim();
     if (!content) return;
-    input.value = '';
+    chatInput.value = '';
     const res = await apiFetch(`/chats/${state.activeMatchId}/messages`, {
       method: 'POST',
       body: JSON.stringify({ content }),
@@ -1163,9 +1726,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.querySelectorAll('.chat-tools-strip [data-ice]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const input = document.getElementById('chat-text-input');
-      input.value = btn.dataset.ice;
-      input.focus();
+      chatInput.value = btn.dataset.ice;
+      chatInput.focus();
     });
   });
 
@@ -1173,18 +1735,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('chat-gifts-drawer').classList.toggle('hidden');
   });
 
-  document.getElementById('btn-invite-safedate').addEventListener('click', async () => {
-    if (!state.activeMatchId) return;
-    const spotsRes = await apiFetch('/dates/spots');
-    const firstSpot = spotsRes.spots?.[0];
-    if (!firstSpot) return;
-    await apiFetch(`/chats/${state.activeMatchId}/date-invite`, {
-      method: 'POST',
-      body: JSON.stringify({ spotId: firstSpot.id, proposedDate: 'Samedi à 17h30' }),
-    });
-    await loadConversation(state.activeMatchId);
-    showToast(`Invitation Safe Date envoyée (${firstSpot.name}) !`);
-  });
+  document.getElementById('btn-invite-safedate').addEventListener('click', openSafeDateModal);
 
   const chatVoiceBtn = document.getElementById('btn-record-chat-voice');
   chatVoiceBtn.addEventListener('click', async () => {
@@ -1193,7 +1744,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const clip = await state.activeRecorder.stop();
       state.activeRecorder = null;
       chatVoiceBtn.classList.remove('recording');
-      chatVoiceBtn.textContent = '🎙️ Vocal';
+      chatVoiceBtn.innerHTML = `${iconSvg('mic', 'ak-ico-sm')}<span>Vocal</span>`;
       await apiFetch(`/chats/${state.activeMatchId}/voice`, {
         method: 'POST',
         body: JSON.stringify(clip),
@@ -1205,7 +1756,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       state.activeRecorder = await recordMicrophoneClip();
       chatVoiceBtn.classList.add('recording');
-      chatVoiceBtn.textContent = '⏹ Stop';
+      chatVoiceBtn.textContent = 'Stop';
     } catch {
       const demo = generateDemoVoiceBase64();
       await apiFetch(`/chats/${state.activeMatchId}/voice`, {
@@ -1259,20 +1810,66 @@ document.addEventListener('DOMContentLoaded', () => {
 
       state.gpContext.activeReference = checkoutData.reference;
       document.getElementById('gp-ref-code').textContent = checkoutData.reference;
-      document.getElementById('gp-checkout-status-msg').textContent = checkoutData.simulated
-        ? `Session Sandbox GeniusPay prête (${state.gpContext.selectedMethod}). Validez ci-dessous pour déclencher le Webhook HMAC-SHA256.`
-        : 'Redirection vers la page de checkout GeniusPay...';
+      const isSimulated = Boolean(checkoutData.simulated);
+      if (!isSimulated) {
+        localStorage.setItem('akwaba_pending_gp_ref', checkoutData.reference);
+      }
+
+      document.getElementById('gp-checkout-status-msg').textContent = isSimulated
+        ? `Session Simulateur local prête (${state.gpContext.selectedMethod}). Validez ci-dessous pour déclencher le Webhook HMAC-SHA256.`
+        : `Session GeniusPay (${checkoutData.environment || 'sandbox'}) créée. Finalisez le paiement sur la page sécurisée GeniusPay ci-dessous, puis vérifiez le statut.`;
 
       const extLink = document.getElementById('gp-external-link');
-      if (!checkoutData.simulated && checkoutData.checkoutUrl) {
+      const checkBtn = document.getElementById('btn-gp-check-status');
+      const simOkBtn = document.getElementById('btn-gp-confirm-sandbox');
+      const simFailBtn = document.getElementById('btn-gp-fail-sandbox');
+
+      if (!isSimulated && checkoutData.checkoutUrl) {
         extLink.href = checkoutData.checkoutUrl;
         extLink.classList.remove('hidden');
+        checkBtn.classList.remove('hidden');
+        simOkBtn.classList.add('hidden');
+        simFailBtn.classList.add('hidden');
       } else {
         extLink.classList.add('hidden');
+        checkBtn.classList.add('hidden');
+        simOkBtn.classList.remove('hidden');
+        simFailBtn.classList.remove('hidden');
       }
 
       document.getElementById('gp-step-select').classList.add('hidden');
       document.getElementById('gp-step-checkout').classList.remove('hidden');
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  document.getElementById('btn-gp-check-status').addEventListener('click', async () => {
+    const ref = state.gpContext.activeReference;
+    if (!ref) return;
+    try {
+      const res = await apiFetch(`/payments/${encodeURIComponent(ref)}/status`);
+      const st = res.order?.status;
+      if (st === 'completed' || res.order?.fulfilled) {
+        localStorage.removeItem('akwaba_pending_gp_ref');
+        document.getElementById('geniuspay-modal').classList.remove('active');
+        state.user = res.user;
+        updateTopbarUser();
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+          showToast(`Paiement GeniusPay validé ! ${res.grantedSummary || ''}`);
+        }
+        if (state.activeView === 'store') loadStoreAndWallet();
+        if (state.activeView === 'dates') loadDatesAndTonight();
+      } else if (['failed', 'cancelled', 'expired'].includes(st)) {
+        localStorage.removeItem('akwaba_pending_gp_ref');
+        document.getElementById('gp-checkout-status-msg').textContent =
+          `Transaction ${ref} terminée avec le statut : ${st}.`;
+        showToast(`Paiement ${st}.`);
+      } else {
+        document.getElementById('gp-checkout-status-msg').textContent =
+          `Statut actuel sur GeniusPay : ${st || 'pending'}. Terminez le paiement sur la page checkout puis revérifiez.`;
+        showToast('Paiement toujours en attente sur GeniusPay.');
+      }
     } catch (err) {
       showToast(err.message);
     }
@@ -1292,8 +1889,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (outcome === 'success') {
       state.user = res.user;
       updateTopbarUser();
-      showToast(`Paiement GeniusPay validé ! ${res.fulfillment?.grantedSummary || ''}`);
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        showToast(`Paiement GeniusPay validé ! ${res.fulfillment?.grantedSummary || ''}`);
+      }
       if (state.activeView === 'store') loadStoreAndWallet();
+      if (state.activeView === 'dates') loadDatesAndTonight();
     } else {
       showToast('Paiement annulé / échoué.');
     }
@@ -1302,7 +1902,37 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-gp-confirm-sandbox').addEventListener('click', () => completeSandboxPayment('success'));
   document.getElementById('btn-gp-fail-sandbox').addEventListener('click', () => completeSandboxPayment('failed'));
 
-  // Profile & Bouclier Babi
+  // Profile Avatar Upload & Bouclier Babi
+  document.getElementById('btn-upload-avatar').addEventListener('click', () => {
+    document.getElementById('input-avatar-file').click();
+  });
+
+  document.getElementById('input-avatar-file').addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      showToast('Photo limitée à 2 Mo.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
+        const res = await apiFetch('/profiles/me/avatar', {
+          method: 'POST',
+          body: JSON.stringify({ imageBase64: reader.result }),
+        });
+        state.user = res.user;
+        document.getElementById('me-preview-photo').src = res.avatarUrl;
+        document.getElementById('edit-avatar-url').value = res.avatarUrl;
+        renderAvatarPresets(res.avatarUrl);
+        showToast('Photo de profil mise à jour !');
+      } catch (err) {
+        showToast(err.message);
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+
   document.getElementById('btn-boost-profile').addEventListener('click', async () => {
     try {
       const res = await apiFetch('/profiles/me/boost', { method: 'POST' });
@@ -1334,6 +1964,16 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btn-submit-selfie').addEventListener('click', async () => {
+    let snapshotData = 'verified_web_capture';
+    const videoEl = document.getElementById('selfie-video');
+    const canvasEl = document.getElementById('selfie-canvas');
+    if (state.selfieStream && videoEl && canvasEl && videoEl.videoWidth > 0) {
+      canvasEl.width = 240;
+      canvasEl.height = 180;
+      const ctx = canvasEl.getContext('2d');
+      ctx?.drawImage(videoEl, 0, 0, 240, 180);
+      snapshotData = canvasEl.toDataURL('image/jpeg', 0.7);
+    }
     if (state.selfieStream) {
       state.selfieStream.getTracks().forEach((t) => t.stop());
       state.selfieStream = null;
@@ -1343,7 +1983,7 @@ document.addEventListener('DOMContentLoaded', () => {
       method: 'POST',
       body: JSON.stringify({
         challengeCode: state.safetyChallenge?.code || 'VICTORY_CHIN',
-        selfieSnapshot: 'verified_web_capture',
+        selfieSnapshot: snapshotData,
       }),
     });
     state.user = res.user;
@@ -1371,7 +2011,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.activeRecorder) {
       const clip = await state.activeRecorder.stop();
       state.activeRecorder = null;
-      bioVoiceBtn.textContent = '🎙️ Enregistrer ma voix';
+      bioVoiceBtn.innerHTML = `${iconSvg('mic', 'ak-ico-sm')}<span>Enregistrer ma voix</span>`;
       const res = await apiFetch('/profiles/me/voice', { method: 'POST', body: JSON.stringify(clip) });
       state.user = res.user;
       showToast('Bio vocale enregistrée !');
@@ -1380,7 +2020,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     try {
       state.activeRecorder = await recordMicrophoneClip();
-      bioVoiceBtn.textContent = '⏹ Terminer l’enregistrement';
+      bioVoiceBtn.textContent = 'Terminer l’enregistrement';
     } catch {
       showToast('Micro indisponible — utilisez "Tester avec audio démo".');
     }
@@ -1396,21 +2036,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('profile-edit-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const quiz = {};
-    document.querySelectorAll('[data-quiz-key]').forEach((sel) => {
-      quiz[sel.dataset.quizKey] = sel.value;
-    });
-    const commune = document.getElementById('edit-commune').value;
-    const city = commune.includes('•') ? (commune.startsWith('Paris') ? 'Paris' : 'Abidjan') : commune;
-    const tags = document
-      .getElementById('edit-tags')
-      .value.split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    try {
+      const quiz = {};
+      document.querySelectorAll('[data-quiz-key]').forEach((sel) => {
+        quiz[sel.dataset.quizKey] = sel.value;
+      });
+      const commune = document.getElementById('edit-commune').value;
+      const city = resolveCityFromCommune(commune);
+      const tags = document
+        .getElementById('edit-tags')
+        .value.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const avatarUrlVal = document.getElementById('edit-avatar-url').value.trim();
 
-    const res = await apiFetch('/profiles/me', {
-      method: 'PUT',
-      body: JSON.stringify({
+      const payload = {
         name: document.getElementById('edit-name').value,
         age: Number(document.getElementById('edit-age').value),
         commune,
@@ -1422,29 +2062,42 @@ document.addEventListener('DOMContentLoaded', () => {
         secretPrompt: document.getElementById('edit-secret').value,
         tags,
         vraiBabi: quiz,
-      }),
-    });
-    state.user = res.user;
+      };
+      if (avatarUrlVal) payload.avatarUrl = avatarUrlVal;
 
-    const pCity = document.getElementById('edit-passport-city').value;
-    const pArrival = document.getElementById('edit-passport-arrival').value;
-    if (pCity !== (state.user.passportTargetCity || '')) {
-      try {
+      const res = await apiFetch('/profiles/me', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      state.user = res.user;
+
+      const pCity = document.getElementById('edit-passport-city').value;
+      const pArrival = document.getElementById('edit-passport-arrival').value;
+      const pDeparture = document.getElementById('edit-passport-departure').value;
+      if (
+        pCity !== (state.user.passportTargetCity || '') ||
+        pArrival !== (state.user.passportArrivalDate || '') ||
+        pDeparture !== (state.user.passportDepartureDate || '')
+      ) {
         const passRes = await apiFetch('/profiles/me/passport', {
           method: 'POST',
-          body: JSON.stringify({ active: Boolean(pCity), targetCity: pCity, arrivalDate: pArrival }),
+          body: JSON.stringify({
+            active: Boolean(pCity),
+            targetCity: pCity,
+            arrivalDate: pArrival,
+            departureDate: pDeparture,
+          }),
         });
         state.user = passRes.user;
-      } catch (err) {
-        showToast(err.message);
       }
-    }
 
-    showToast('Profil et quiz Vrai Babi enregistrés !');
-    loadProfileEditor();
+      showToast('Profil et quiz Vrai Babi enregistrés !');
+      loadProfileEditor();
+    } catch (err) {
+      showToast(err.message);
+    }
   });
 
-  // Auto-resume existing session if JWT token is valid
   if (getToken()) {
     bootstrapSession().catch(() => {
       setToken('');

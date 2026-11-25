@@ -1,5 +1,13 @@
-const CACHE_NAME = 'akwaba-v2';
-const PRECACHE_URLS = ['/', '/css/app.css', '/js/app.js', '/js/api.js', '/js/audio.js', '/manifest.json'];
+const CACHE_NAME = 'akwaba-v3';
+const PRECACHE_URLS = [
+  '/',
+  '/css/app.css',
+  '/js/app.js',
+  '/js/api.js',
+  '/js/audio.js',
+  '/js/icons.js',
+  '/manifest.json',
+];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

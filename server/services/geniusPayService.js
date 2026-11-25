@@ -133,6 +133,7 @@ export async function createGeniusPayPayment({
         'X-API-Key': config.geniusPay.publicKey,
         'X-API-Secret': config.geniusPay.secretKey,
         'Content-Type': 'application/json',
+        Accept: 'application/json',
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(15_000),
@@ -140,14 +141,26 @@ export async function createGeniusPayPayment({
 
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.success) {
-      const msg = json?.error?.message || 'Erreur API GeniusPay';
+      const msg = json?.error?.message || json?.message || 'Erreur API GeniusPay';
       throw new Error(msg);
     }
+
+    const data = json.data || {};
+    const feesEstimate =
+      data.fees !== undefined && data.fees !== null
+        ? Number(data.fees)
+        : estimateGeniusPayFees(Number(amount), paymentMethod || data.gateway || 'wave').fees;
+    const netEstimate =
+      data.net_amount !== undefined && data.net_amount !== null
+        ? Number(data.net_amount)
+        : Math.max(0, Number(amount) - feesEstimate);
 
     return {
       mode: config.geniusPay.env,
       simulated: false,
-      ...json.data,
+      ...data,
+      fees: feesEstimate,
+      net_amount: netEstimate,
     };
   }
 
@@ -182,6 +195,7 @@ export async function fetchGeniusPayPaymentStatus(reference) {
       headers: {
         'X-API-Key': config.geniusPay.publicKey,
         'X-API-Secret': config.geniusPay.secretKey,
+        Accept: 'application/json',
       },
       signal: AbortSignal.timeout(10_000),
     });
