@@ -24,7 +24,7 @@ export function createApp() {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Access-Control-Allow-Origin', config.corsOrigin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Admin-Secret');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
@@ -66,6 +66,8 @@ export function createApp() {
       service: 'akwaba-api',
       version: '1.0.0',
       geniusPayMode: config.geniusPay.useLocalSimulator ? 'sandbox-simulator' : config.geniusPay.env,
+      whatsappOtpMode: config.whatsapp.useLocalSimulator ? 'local-simulator' : 'meta-cloud-api',
+      selfieVisionAi: config.selfieAi.geminiApiKey ? config.selfieAi.geminiModel : 'manual-moderation',
       timestamp: new Date().toISOString(),
     });
   });

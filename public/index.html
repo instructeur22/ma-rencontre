@@ -286,6 +286,36 @@
     </div>
   </div>
 
+  <!-- ADMIN MODERATION MODAL (BOUCLIER BABI) -->
+  <div id="admin-mod-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="admin-mod-title">
+    <div class="modal-sheet surface-card admin-mod-sheet">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">Bouclier Babi • Revue humaine privée</p>
+          <h3 id="admin-mod-title">File de modération Selfie 225</h3>
+        </div>
+        <button id="btn-close-admin-mod" class="icon-close" type="button" aria-label="Fermer" data-icon="close" data-icon-class="ak-ico-sm"></button>
+      </div>
+
+      <div class="admin-auth-bar">
+        <input id="admin-secret-input" type="password" placeholder="Clé X-Admin-Secret" autocomplete="off" />
+        <select id="admin-status-filter" aria-label="Filtrer par statut">
+          <option value="pending_review">En attente</option>
+          <option value="all">Tout voir</option>
+          <option value="verified">Approuvés</option>
+          <option value="rejected">Refusés</option>
+        </select>
+        <button id="btn-admin-load-queue" class="btn-primary" type="button">Charger</button>
+      </div>
+
+      <p id="admin-mod-status-msg" class="muted-text small" style="margin-bottom:0.75rem;">
+        Saisissez votre clé de modération pour consulter les selfies privés en attente.
+      </p>
+
+      <div id="admin-mod-queue-list" class="admin-mod-list"></div>
+    </div>
+  </div>
+
   <!-- MAIN APP SHELL -->
   <div id="app-shell" class="app-shell hidden">
     <header class="topbar">
@@ -600,24 +630,44 @@
 
             <!-- Bouclier Babi Verification Card -->
             <div class="surface-card panel-pad">
-              <h3 class="inline-icon-label"><span data-icon="shieldCheck" data-icon-class="ak-ico-sm"></span> Vérification Selfie 225 (Anti-Brouteur)</h3>
+              <div class="panel-title-row" style="margin-bottom:0.45rem;">
+                <h3 class="inline-icon-label"><span data-icon="shieldCheck" data-icon-class="ak-ico-sm"></span> Vérification Selfie 225</h3>
+                <button id="btn-open-admin-mod" class="btn-text" type="button" title="Ouvrir la file de modération Bouclier Babi">Modération</button>
+              </div>
+              <div id="safety-verif-status" class="verif-status-banner hidden"></div>
               <p id="safety-challenge-label" class="muted-text small"></p>
               <div class="camera-stage hidden" id="selfie-camera-stage">
                 <video id="selfie-video" autoplay playsinline muted></video>
                 <canvas id="selfie-canvas" class="hidden"></canvas>
               </div>
+              <div id="selfie-preview-box" class="selfie-preview-box hidden">
+                <img id="selfie-preview-img" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'/%3E" alt="Aperçu du selfie sélectionné" />
+                <div class="selfie-preview-meta">
+                  <strong class="small">Cliché prêt à envoyer</strong>
+                  <button id="btn-clear-selfie-preview" class="btn-text" type="button">Retirer</button>
+                </div>
+              </div>
+              <input id="input-selfie-file" type="file" accept="image/jpeg,image/png,image/webp" capture="user" class="hidden" />
               <div class="selfie-btn-row">
                 <button id="btn-start-selfie-cam" class="btn-secondary btn-with-icon" type="button">
                   <span data-icon="camera" data-icon-class="ak-ico-sm"></span>
-                  <span>Activer la caméra</span>
+                  <span>Caméra live</span>
                 </button>
-                <button id="btn-submit-selfie" class="btn-primary" type="button">Valider le défi Selfie 225</button>
+                <button id="btn-upload-selfie" class="btn-secondary" type="button">Importer un selfie</button>
+                <button id="btn-submit-selfie" class="btn-primary" type="button">Envoyer le Selfie 225</button>
               </div>
               <div class="field inline-phone-verify">
-                <label for="input-verify-phone">Numéro vérifié (+225 / Diaspora)</label>
+                <label for="input-verify-phone">Vérification WhatsApp OTP (+225 / Diaspora)</label>
                 <div class="phone-verify-row">
-                  <input id="input-verify-phone" type="tel" placeholder="+2250700000000" />
-                  <button id="btn-verify-phone" class="btn-secondary" type="button">Vérifier</button>
+                  <input id="input-verify-phone" type="tel" placeholder="+225 07 08 00 00 00" />
+                  <button id="btn-request-wa-otp" class="btn-secondary" type="button">Envoyer code</button>
+                </div>
+                <div id="wa-otp-verify-block" class="wa-otp-block hidden">
+                  <p id="wa-otp-dev-hint" class="wa-otp-hint hidden"></p>
+                  <div class="phone-verify-row">
+                    <input id="input-wa-otp-code" type="text" inputmode="numeric" maxlength="6" placeholder="Code à 6 chiffres" autocomplete="one-time-code" />
+                    <button id="btn-confirm-wa-otp" class="btn-primary" type="button">Valider OTP</button>
+                  </div>
                 </div>
               </div>
             </div>

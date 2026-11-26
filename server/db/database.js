@@ -9,6 +9,26 @@ const __dirname = path.dirname(__filename);
 
 let dbInstance = null;
 
+function ensureSchemaMigrations(db) {
+  const verifCols = new Set(
+    db.prepare('PRAGMA table_info(safety_verifications)').all().map((c) => c.name)
+  );
+  const additions = [
+    ['image_path', "TEXT DEFAULT ''"],
+    ['ai_provider', "TEXT DEFAULT ''"],
+    ['ai_confidence', 'REAL DEFAULT 0'],
+    ['ai_reason', "TEXT DEFAULT ''"],
+    ['ai_details_json', "TEXT DEFAULT '{}'"],
+    ['reviewer_note', "TEXT DEFAULT ''"],
+    ['reviewed_at', 'TEXT'],
+  ];
+  for (const [col, def] of additions) {
+    if (!verifCols.has(col)) {
+      db.exec(`ALTER TABLE safety_verifications ADD COLUMN ${col} ${def};`);
+    }
+  }
+}
+
 export function getDb(customPath = null) {
   if (dbInstance && !customPath) return dbInstance;
   const targetPath = customPath || config.dbPath;
@@ -19,6 +39,7 @@ export function getDb(customPath = null) {
   db.exec('PRAGMA busy_timeout = 5000;');
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
   db.exec(schema);
+  ensureSchemaMigrations(db);
   if (!customPath) {
     dbInstance = db;
   }

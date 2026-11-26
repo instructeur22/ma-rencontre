@@ -57,6 +57,9 @@ const state = {
   },
   activeRecorder: null,
   selfieStream: null,
+  pendingSelfieDataUrl: null,
+  pendingWaPhone: '',
+  adminBlobUrls: [],
   typingTimer: null,
   lastTypingSentAt: 0,
 };
@@ -277,6 +280,17 @@ function handleRealtimeEvent(evt) {
       updateTopbarUser();
       if (state.activeView === 'store') loadStoreAndWallet();
       if (state.activeView === 'dates') loadDatesAndTonight();
+    });
+  } else if (evt.type === 'verification_updated') {
+    const msg =
+      evt.status === 'verified'
+        ? `Bouclier Babi : badge Vérifié 225 activé ! Score : ${evt.trustScore}/100`
+        : `Bouclier Babi : selfie refusé${evt.note ? ` (${evt.note})` : ''}. Vous pouvez réessayer.`;
+    showToast(msg);
+    apiFetch('/auth/me').then((me) => {
+      state.user = me.user;
+      updateTopbarUser();
+      if (state.activeView === 'profile') loadProfileEditor();
     });
   }
 }
@@ -1360,6 +1374,25 @@ async function loadProfileEditor() {
     `Défi du jour : "${safetyRes.challenge.label}" — ${safetyRes.challenge.tip}`;
   document.getElementById('input-verify-phone').value = u.phone || '';
 
+  const verifBanner = document.getElementById('safety-verif-status');
+  const latestVerif = safetyRes.latestVerification;
+  if (verifBanner) {
+    verifBanner.classList.remove('hidden', 'is-verified', 'is-pending', 'is-rejected');
+    if (u.verified225 || latestVerif?.status === 'verified') {
+      verifBanner.classList.add('is-verified');
+      const detail = latestVerif?.reviewerNote || latestVerif?.aiReason || 'Identité confirmée par Bouclier Babi.';
+      verifBanner.innerHTML = `<strong>Vérifié 225 ✓</strong><span>${escapeHtml(detail)}</span>`;
+    } else if (latestVerif?.status === 'pending_review') {
+      verifBanner.classList.add('is-pending');
+      verifBanner.innerHTML = `<strong>En attente de modération</strong><span>${escapeHtml(latestVerif.aiReason || 'Cliché reçu — vérification en cours par notre équipe.')}</span>`;
+    } else if (latestVerif?.status === 'rejected') {
+      verifBanner.classList.add('is-rejected');
+      verifBanner.innerHTML = `<strong>Selfie refusé — nouvel essai requis</strong><span>${escapeHtml(latestVerif.reviewerNote || latestVerif.aiReason || 'Le geste ou le visage n’a pas pu être validé.')}</span>`;
+    } else {
+      verifBanner.classList.add('hidden');
+    }
+  }
+
   const voiceHost = document.getElementById('me-voice-player-host');
   voiceHost.innerHTML = u.voiceNoteUrl
     ? renderVoicePlayerHtml(u.voiceNoteUrl, u.voiceDurationSec, true, 'Ma bio vocale', u.id)
@@ -1951,6 +1984,38 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast(`Code parrain copié : ${code}`);
   });
 
+  const clearSelfiePreview = () => {
+    state.pendingSelfieDataUrl = null;
+    const input = document.getElementById('input-selfie-file');
+    if (input) input.value = '';
+    document.getElementById('selfie-preview-box')?.classList.add('hidden');
+  };
+
+  document.getElementById('btn-clear-selfie-preview').addEventListener('click', clearSelfiePreview);
+
+  document.getElementById('btn-upload-selfie').addEventListener('click', () => {
+    document.getElementById('input-selfie-file').click();
+  });
+
+  document.getElementById('input-selfie-file').addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) {
+      showToast('Le selfie ne doit pas dépasser 3 Mo.');
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      state.pendingSelfieDataUrl = String(reader.result || '');
+      const img = document.getElementById('selfie-preview-img');
+      if (img) img.src = state.pendingSelfieDataUrl;
+      document.getElementById('selfie-preview-box')?.classList.remove('hidden');
+      showToast('Cliché chargé — cliquez sur « Envoyer le Selfie 225 ».');
+    };
+    reader.readAsDataURL(file);
+  });
+
   document.getElementById('btn-start-selfie-cam').addEventListener('click', async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
@@ -1959,50 +2024,224 @@ document.addEventListener('DOMContentLoaded', () => {
       stage.classList.remove('hidden');
       document.getElementById('selfie-video').srcObject = stream;
     } catch {
-      showToast('Caméra indisponible — vous pouvez valider le défi en mode démo.');
+      showToast('Caméra indisponible — utilisez « Importer un selfie » (JPEG/PNG/WebP).');
     }
   });
 
   document.getElementById('btn-submit-selfie').addEventListener('click', async () => {
-    let snapshotData = 'verified_web_capture';
+    let imageDataUrl = state.pendingSelfieDataUrl;
     const videoEl = document.getElementById('selfie-video');
     const canvasEl = document.getElementById('selfie-canvas');
     if (state.selfieStream && videoEl && canvasEl && videoEl.videoWidth > 0) {
-      canvasEl.width = 240;
-      canvasEl.height = 180;
+      canvasEl.width = 480;
+      canvasEl.height = 360;
       const ctx = canvasEl.getContext('2d');
-      ctx?.drawImage(videoEl, 0, 0, 240, 180);
-      snapshotData = canvasEl.toDataURL('image/jpeg', 0.7);
+      ctx?.drawImage(videoEl, 0, 0, 480, 360);
+      imageDataUrl = canvasEl.toDataURL('image/jpeg', 0.85);
     }
+
+    if (!imageDataUrl) {
+      showToast('Activez la caméra ou importez un vrai selfie (JPEG, PNG ou WebP) avant d’envoyer.');
+      return;
+    }
+
     if (state.selfieStream) {
       state.selfieStream.getTracks().forEach((t) => t.stop());
       state.selfieStream = null;
       document.getElementById('selfie-camera-stage').classList.add('hidden');
     }
-    const res = await apiFetch('/safety/verify-selfie', {
-      method: 'POST',
-      body: JSON.stringify({
-        challengeCode: state.safetyChallenge?.code || 'VICTORY_CHIN',
-        selfieSnapshot: snapshotData,
-      }),
-    });
-    state.user = res.user;
-    showToast(`Badge Vérifié 225 activé ! Score : ${res.trustScore}/100`);
-    loadProfileEditor();
-  });
 
-  document.getElementById('btn-verify-phone').addEventListener('click', async () => {
     try {
-      const phone = document.getElementById('input-verify-phone').value;
-      const res = await apiFetch('/auth/phone-verify', {
+      const res = await apiFetch('/safety/verify-selfie', {
         method: 'POST',
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({
+          challengeCode: state.safetyChallenge?.code || 'VICTORY_CHIN',
+          imageBase64: imageDataUrl,
+        }),
       });
+      clearSelfiePreview();
       state.user = res.user;
-      showToast(`Numéro vérifié ! Score de confiance : ${res.trustScore}/100`);
+      if (res.status === 'verified') {
+        showToast(`Badge Vérifié 225 activé ! Score : ${res.trustScore}/100`);
+      } else if (res.status === 'pending_review') {
+        showToast('Selfie reçu ! En attente de validation Bouclier Babi.');
+      } else {
+        showToast(`Selfie refusé : ${res.aiReason || 'veuillez reprendre un cliché net.'}`);
+      }
       loadProfileEditor();
     } catch (err) {
       showToast(err.message);
+    }
+  });
+
+  // WhatsApp OTP 2-step Phone Verification
+  document.getElementById('btn-request-wa-otp').addEventListener('click', async () => {
+    try {
+      const phone = document.getElementById('input-verify-phone').value.trim();
+      const res = await apiFetch('/auth/phone-otp/request', {
+        method: 'POST',
+        body: JSON.stringify({ phone }),
+      });
+      state.pendingWaPhone = res.phone;
+      document.getElementById('input-verify-phone').value = res.phone;
+      document.getElementById('wa-otp-verify-block').classList.remove('hidden');
+      const hintEl = document.getElementById('wa-otp-dev-hint');
+      if (res.simulated && res.devOtpCode) {
+        hintEl.textContent = `Mode simulateur local — Code OTP WhatsApp : ${res.devOtpCode}`;
+        hintEl.classList.remove('hidden');
+      } else {
+        hintEl.textContent = `Code envoyé sur WhatsApp au ${res.phone} (valable 5 min).`;
+        hintEl.classList.remove('hidden');
+      }
+      document.getElementById('input-wa-otp-code').value = '';
+      document.getElementById('input-wa-otp-code').focus();
+      showToast(`Code OTP WhatsApp envoyé vers ${res.phone}.`);
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  document.getElementById('btn-confirm-wa-otp').addEventListener('click', async () => {
+    try {
+      const phone = state.pendingWaPhone || document.getElementById('input-verify-phone').value.trim();
+      const code = document.getElementById('input-wa-otp-code').value.trim();
+      const res = await apiFetch('/auth/phone-otp/verify', {
+        method: 'POST',
+        body: JSON.stringify({ phone, code }),
+      });
+      state.user = res.user;
+      document.getElementById('wa-otp-verify-block').classList.add('hidden');
+      document.getElementById('input-wa-otp-code').value = '';
+      showToast(`Numéro WhatsApp vérifié ! Score de confiance : ${res.trustScore}/100`);
+      loadProfileEditor();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // Admin Moderation Queue (Bouclier Babi)
+  const revokeAdminBlobs = () => {
+    state.adminBlobUrls.forEach((u) => URL.revokeObjectURL(u));
+    state.adminBlobUrls = [];
+  };
+
+  const closeAdminModModal = () => {
+    revokeAdminBlobs();
+    document.getElementById('admin-mod-modal').classList.remove('active');
+  };
+
+  const loadAdminModerationQueue = async () => {
+    const secret = document.getElementById('admin-secret-input').value.trim();
+    const statusFilter = document.getElementById('admin-status-filter').value;
+    const statusMsg = document.getElementById('admin-mod-status-msg');
+    const listEl = document.getElementById('admin-mod-queue-list');
+    if (!secret) {
+      statusMsg.textContent = 'Veuillez saisir la clé X-Admin-Secret.';
+      return;
+    }
+    revokeAdminBlobs();
+    statusMsg.textContent = 'Chargement de la file Bouclier Babi...';
+    try {
+      const res = await apiFetch(`/safety/admin/verifications?status=${encodeURIComponent(statusFilter)}`, {
+        headers: { 'X-Admin-Secret': secret },
+      });
+      const items = res.verifications || [];
+      statusMsg.textContent = items.length
+        ? `${items.length} demande(s) dans la vue « ${statusFilter} ».`
+        : 'Aucune demande dans cette file.';
+
+      const statusLabels = {
+        pending_review: 'En attente',
+        verified: 'Approuvé ✓',
+        rejected: 'Refusé',
+      };
+      listEl.innerHTML = items
+        .map(
+          (v) => `
+          <article class="admin-mod-card" data-ver-id="${escapeHtml(v.id)}">
+            <div class="admin-mod-photos">
+              <div class="admin-photo-slot">
+                <span class="small muted-text">Profil</span>
+                <img src="${escapeHtml(v.userAvatarUrl)}" alt="${escapeHtml(v.userName)}" />
+              </div>
+              <div class="admin-photo-slot">
+                <span class="small muted-text">Selfie défi</span>
+                <img class="admin-private-selfie" data-ver-id="${escapeHtml(v.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'/%3E" alt="Selfie privé" />
+              </div>
+            </div>
+            <div class="admin-mod-info">
+              <div class="card-meta-line">
+                <strong>${escapeHtml(v.userName)}, ${v.userAge}</strong>
+                <span class="status-chip ${v.status === 'verified' ? '' : 'pending-chip'}">${escapeHtml(statusLabels[v.status] || v.status)}</span>
+              </div>
+              <p class="small muted-text">${escapeHtml(v.userCommune)} • Défi : ${escapeHtml(v.challengeLabel)}</p>
+              <p class="small">${escapeHtml(v.aiReason || 'En attente de revue humaine.')}</p>
+              ${
+                v.status !== 'verified'
+                  ? `<div class="admin-mod-actions">
+                       <button type="button" class="btn-primary btn-admin-decision" data-ver-id="${escapeHtml(v.id)}" data-decision="verified">Approuver 225 ✓</button>
+                       <button type="button" class="btn-secondary btn-admin-decision" data-ver-id="${escapeHtml(v.id)}" data-decision="rejected">Refuser</button>
+                     </div>`
+                  : ''
+              }
+            </div>
+          </article>
+        `
+        )
+        .join('');
+
+      // Fetch private selfie blobs using X-Admin-Secret header
+      listEl.querySelectorAll('.admin-private-selfie').forEach(async (imgEl) => {
+        const verId = imgEl.dataset.verId;
+        try {
+          const resp = await fetch(`/api/v1/safety/admin/verifications/${encodeURIComponent(verId)}/image`, {
+            headers: { 'X-Admin-Secret': secret },
+          });
+          if (!resp.ok) return;
+          const blob = await resp.blob();
+          const url = URL.createObjectURL(blob);
+          state.adminBlobUrls.push(url);
+          imgEl.src = url;
+        } catch {
+          // Ignore unavailable image
+        }
+      });
+
+      listEl.querySelectorAll('.btn-admin-decision').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const verId = btn.dataset.verId;
+          const decision = btn.dataset.decision;
+          try {
+            await apiFetch(`/safety/admin/verifications/${encodeURIComponent(verId)}/review`, {
+              method: 'POST',
+              headers: { 'X-Admin-Secret': secret },
+              body: JSON.stringify({
+                decision,
+                note: decision === 'verified' ? 'Validé par modération Bouclier Babi' : 'Geste ou visage non conforme',
+              }),
+            });
+            showToast(decision === 'verified' ? 'Selfie 225 approuvé !' : 'Selfie refusé.');
+            await loadAdminModerationQueue();
+            if (state.activeView === 'profile') loadProfileEditor();
+          } catch (err) {
+            showToast(err.message);
+          }
+        });
+      });
+    } catch (err) {
+      statusMsg.textContent = err.message;
+      listEl.innerHTML = '';
+    }
+  };
+
+  document.getElementById('btn-open-admin-mod').addEventListener('click', () => {
+    document.getElementById('admin-mod-modal').classList.add('active');
+  });
+  document.getElementById('btn-close-admin-mod').addEventListener('click', closeAdminModModal);
+  document.getElementById('btn-admin-load-queue').addEventListener('click', loadAdminModerationQueue);
+  document.getElementById('admin-status-filter').addEventListener('change', () => {
+    if (document.getElementById('admin-secret-input').value.trim()) {
+      loadAdminModerationQueue();
     }
   });
 

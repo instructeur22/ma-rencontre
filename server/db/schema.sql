@@ -94,8 +94,30 @@ CREATE TABLE IF NOT EXISTS safety_verifications (
   user_id TEXT NOT NULL,
   challenge_code TEXT NOT NULL,
   challenge_label TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'verified',
+  status TEXT NOT NULL DEFAULT 'pending_review',
   selfie_snapshot TEXT DEFAULT '',
+  image_path TEXT DEFAULT '',
+  ai_provider TEXT DEFAULT '',
+  ai_confidence REAL DEFAULT 0,
+  ai_reason TEXT DEFAULT '',
+  ai_details_json TEXT DEFAULT '{}',
+  reviewer_note TEXT DEFAULT '',
+  reviewed_at TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS phone_otp_challenges (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  phone_e164 TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  channel TEXT NOT NULL DEFAULT 'whatsapp',
+  attempts INTEGER DEFAULT 0,
+  max_attempts INTEGER DEFAULT 5,
+  expires_at TEXT NOT NULL,
+  verified_at TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -179,3 +201,5 @@ CREATE INDEX IF NOT EXISTS idx_swipes_target ON swipes(target_id);
 CREATE INDEX IF NOT EXISTS idx_messages_match ON messages(match_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_ref ON payment_orders(reference);
+CREATE INDEX IF NOT EXISTS idx_phone_otp_user ON phone_otp_challenges(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_safety_verif_status ON safety_verifications(status, created_at);

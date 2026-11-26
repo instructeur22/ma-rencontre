@@ -14,10 +14,14 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    AdminSecret:
+      type: apiKey
+      in: header
+      name: X-Admin-Secret
 paths:
   /health:
     get:
-      summary: Vérifier l'état de l'API et le mode GeniusPay actif
+      summary: Vérifier l'état de l'API, GeniusPay, WhatsApp OTP et Gemini Vision
       responses:
         '200':
           description: Service opérationnel
@@ -47,14 +51,36 @@ paths:
       responses:
         '200':
           description: Session courante
+  /auth/phone-otp/request:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Envoyer un code OTP 6 chiffres par WhatsApp Cloud API (ou simulateur local dev)
+      responses:
+        '200':
+          description: Code OTP envoyé (avec cooldown anti-abus)
+        '429':
+          description: Cooldown actif avant renvoi
+  /auth/phone-otp/verify:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Valider le code OTP WhatsApp 6 chiffres et activer le badge téléphone (+15 confiance)
+      responses:
+        '200':
+          description: Numéro vérifié
+        '422':
+          description: Code OTP invalide
   /auth/phone-verify:
     post:
       security:
         - BearerAuth: []
-      summary: Vérifier un numéro (+225 ou diaspora) et augmenter le score de confiance
+      summary: Alias rétrocompatible de /auth/phone-otp/verify (exige désormais un code OTP 6 chiffres valide)
       responses:
         '200':
           description: Numéro vérifié
+        '422':
+          description: Code OTP manquant ou invalide
   /profiles/discover:
     get:
       security:
@@ -288,18 +314,66 @@ paths:
     get:
       security:
         - BearerAuth: []
-      summary: Obtenir le défi selfie gestuel du jour et le détail du score de confiance
+      summary: Obtenir le défi selfie gestuel du jour, le statut de vérification et le détail du score de confiance
       responses:
         '200':
-          description: Défi et métriques
+          description: Défi, dernière soumission et métriques
   /safety/verify-selfie:
     post:
       security:
         - BearerAuth: []
-      summary: Soumettre le défi selfie et obtenir le badge Vérifié 225
+      summary: Soumettre une vraie photo selfie (JPEG/PNG/WebP base64) pour analyse Gemini Vision ou file manuelle
       responses:
         '200':
-          description: Badge Vérifié 225 activé
+          description: Résultat de soumission (verified, pending_review ou rejected)
+        '422':
+          description: Image invalide ou payload factice rejeté
+  /safety/admin/verifications:
+    get:
+      security:
+        - AdminSecret: []
+      summary: Lister la file de modération Selfie 225 (filtrable par status)
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending_review, verified, rejected, all]
+      responses:
+        '200':
+          description: File des demandes de vérification
+        '401':
+          description: Secret X-Admin-Secret invalide
+  /safety/admin/verifications/{id}/image:
+    get:
+      security:
+        - AdminSecret: []
+      summary: Télécharger le cliché selfie privé stocké hors public/ (Cache-Control no-store)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Flux binaire de l'image selfie
+        '404':
+          description: Image introuvable
+  /safety/admin/verifications/{id}/review:
+    post:
+      security:
+        - AdminSecret: []
+      summary: Approuver ou refuser une demande Selfie 225 et notifier le membre en temps réel via WebSocket
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Décision enregistrée et score de confiance recalculé
   /safety/report:
     post:
       security:

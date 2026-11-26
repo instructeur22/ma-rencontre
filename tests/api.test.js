@@ -136,13 +136,13 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
     assert.equal(revealRes.json.data.profile.name, 'Nadia');
   });
 
-  it('runs Bouclier Babi anti-scam sentinel and selfie verification', async () => {
-    const safetyRes = await req('POST', '/safety/verify-selfie', {
+  it('runs Bouclier Babi anti-scam sentinel and rejects fake selfie snapshots', async () => {
+    const fakeSafety = await req('POST', '/safety/verify-selfie', {
       challengeCode: 'VICTORY_CHIN',
       selfieSnapshot: 'test_snapshot',
     }, kouameToken);
-    assert.equal(safetyRes.status, 200);
-    assert.equal(safetyRes.json.data.verified225, true);
+    assert.equal(fakeSafety.status, 422);
+    assert.equal(fakeSafety.json.error.code, 'INVALID_SELFIE_IMAGE');
 
     const scamMsg = await req(
       'POST',
@@ -635,6 +635,252 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
       config.geniusPay.useLocalSimulator = origSim;
       config.geniusPay.publicKey = origPub;
       config.geniusPay.secretKey = origSec;
+    }
+  });
+
+  it('enforces WhatsApp OTP flow (cooldown, wrong code, verify, replay ban, and Meta Cloud API call)', async () => {
+    const reg = await req('POST', '/auth/register', {
+      email: 'otpuser@akwaba.ci',
+      password: 'Password123',
+      name: 'Bamba',
+      age: 28,
+      gender: 'man',
+      lookingFor: 'women',
+      commune: 'Plateau',
+      city: 'Abidjan',
+    });
+    assert.equal(reg.status, 201);
+    const bambaToken = reg.json.data.token;
+    const baseScore = reg.json.data.user.trustScore;
+
+    // Legacy /auth/phone-verify without OTP code must fail
+    const noCode = await req('POST', '/auth/phone-verify', { phone: '+2250708998877' }, bambaToken);
+    assert.equal(noCode.status, 422);
+
+    // 1. Request WhatsApp OTP in local simulator mode
+    const reqOtp = await req('POST', '/auth/phone-otp/request', { phone: '07 08 99 88 77' }, bambaToken);
+    assert.equal(reqOtp.status, 200);
+    assert.equal(reqOtp.json.data.phone, '+2250708998877');
+    assert.equal(reqOtp.json.data.channel, 'whatsapp');
+    assert.equal(reqOtp.json.data.simulated, true);
+    assert.match(reqOtp.json.data.devOtpCode, /^\d{6}$/);
+
+    // 2. Cooldown blocks immediate spam retry
+    const spamOtp = await req('POST', '/auth/phone-otp/request', { phone: '+2250708998877' }, bambaToken);
+    assert.equal(spamOtp.status, 429);
+    assert.equal(spamOtp.json.error.code, 'OTP_COOLDOWN');
+
+    // 3. Wrong OTP fails and decrements remaining attempts
+    const badCode = await req(
+      'POST',
+      '/auth/phone-otp/verify',
+      { phone: '+2250708998877', code: '000000' },
+      bambaToken
+    );
+    assert.equal(badCode.status, 422);
+    assert.equal(badCode.json.error.code, 'INVALID_OTP');
+
+    // 4. Correct OTP verifies phone and increases trustScore by +15
+    const goodCode = await req(
+      'POST',
+      '/auth/phone-otp/verify',
+      { phone: '+2250708998877', code: reqOtp.json.data.devOtpCode },
+      bambaToken
+    );
+    assert.equal(goodCode.status, 200);
+    assert.equal(goodCode.json.data.phoneVerified, true);
+    assert.equal(goodCode.json.data.trustScore, baseScore + 15);
+
+    // 5. Replaying already-used OTP fails
+    const replay = await req(
+      'POST',
+      '/auth/phone-otp/verify',
+      { phone: '+2250708998877', code: reqOtp.json.data.devOtpCode },
+      bambaToken
+    );
+    assert.equal(replay.status, 404);
+
+    // 6. Meta WhatsApp Cloud API live-mode payload test (mocked fetch)
+    const origFetch = globalThis.fetch;
+    const origWaSim = config.whatsapp.useLocalSimulator;
+    const origWaToken = config.whatsapp.accessToken;
+    const origWaPhoneId = config.whatsapp.phoneNumberId;
+    let capturedWaPayload = null;
+    try {
+      config.whatsapp.useLocalSimulator = false;
+      config.whatsapp.accessToken = 'EAAB_test_token';
+      config.whatsapp.phoneNumberId = '123456789012345';
+      globalThis.fetch = async (url, opts) => {
+        if (String(url).includes('graph.facebook.com')) {
+          capturedWaPayload = JSON.parse(opts.body);
+          return new Response(JSON.stringify({ messages: [{ id: 'wamid.meta_ok' }] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return origFetch(url, opts);
+      };
+
+      const reg2 = await req('POST', '/auth/register', {
+        email: 'waapi@akwaba.ci',
+        password: 'Password123',
+        name: 'Fanta',
+        age: 26,
+        gender: 'woman',
+        lookingFor: 'men',
+        commune: 'Cocody • Riviera',
+        city: 'Abidjan',
+      });
+      const waReq = await req('POST', '/auth/phone-otp/request', { phone: '+2250501020304' }, reg2.json.data.token);
+      assert.equal(waReq.status, 200);
+      assert.equal(waReq.json.data.simulated, false);
+      assert.equal(waReq.json.data.devOtpCode, undefined);
+      assert.equal(capturedWaPayload.messaging_product, 'whatsapp');
+      assert.equal(capturedWaPayload.to, '2250501020304');
+      assert.equal(capturedWaPayload.type, 'template');
+    } finally {
+      globalThis.fetch = origFetch;
+      config.whatsapp.useLocalSimulator = origWaSim;
+      config.whatsapp.accessToken = origWaToken;
+      config.whatsapp.phoneNumberId = origWaPhoneId;
+    }
+  });
+
+  it('runs hybrid Selfie 225 verification (manual queue + admin review + Gemini Vision decisions)', async () => {
+    const validPng =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    const reg = await req('POST', '/auth/register', {
+      email: 'selfieuser@akwaba.ci',
+      password: 'Password123',
+      name: 'Mariam',
+      age: 25,
+      gender: 'woman',
+      lookingFor: 'men',
+      commune: 'Marcory • Zone 4',
+      city: 'Abidjan',
+    });
+    assert.equal(reg.status, 201);
+    const mariamToken = reg.json.data.token;
+    const initialScore = reg.json.data.user.trustScore;
+
+    // 1. Without GEMINI_API_KEY -> goes to pending_review (NOT verified yet)
+    const origGeminiKey = config.selfieAi.geminiApiKey;
+    config.selfieAi.geminiApiKey = '';
+    const subPending = await req(
+      'POST',
+      '/safety/verify-selfie',
+      { challengeCode: 'VICTORY_CHIN', imageBase64: validPng },
+      mariamToken
+    );
+    assert.equal(subPending.status, 200);
+    assert.equal(subPending.json.data.status, 'pending_review');
+    assert.equal(subPending.json.data.verified225, false);
+    const verId = subPending.json.data.verificationId;
+
+    // 2. Admin queue rejects missing/wrong secret
+    const unauthQueue = await req('GET', '/safety/admin/verifications');
+    assert.equal(unauthQueue.status, 401);
+
+    // 3. Admin queue lists pending verification and streams private image
+    const adminHeaders = { 'X-Admin-Secret': config.adminModerationSecret };
+    const queue = await req('GET', '/safety/admin/verifications?status=pending_review', null, null, adminHeaders);
+    assert.equal(queue.status, 200);
+    assert.ok(queue.json.data.verifications.some((v) => v.id === verId));
+
+    const imgRes = await fetch(`${baseUrl}/api/v1/safety/admin/verifications/${verId}/image`, {
+      headers: adminHeaders,
+    });
+    assert.equal(imgRes.status, 200);
+    assert.equal(imgRes.headers.get('content-type'), 'image/png');
+
+    // 4. Admin approves -> badge granted + trustScore increases by +25
+    const approve = await req(
+      'POST',
+      `/safety/admin/verifications/${verId}/review`,
+      { decision: 'verified', note: 'Geste V conforme et visage net.' },
+      null,
+      adminHeaders
+    );
+    assert.equal(approve.status, 200);
+    assert.equal(approve.json.data.verified225, true);
+    assert.equal(approve.json.data.trustScore, initialScore + 25);
+
+    // 5. Gemini Vision API high-confidence auto-verify & low-confidence rejection (mocked fetch)
+    const origFetch = globalThis.fetch;
+    try {
+      config.selfieAi.geminiApiKey = 'AIza_test_key';
+      let mockAiDecision = {
+        face_detected: true,
+        gesture_matches: false,
+        matches_profile_photo: true,
+        confidence: 0.22,
+        reason: 'Le geste demandé n’est pas visible sur le cliché.',
+      };
+      globalThis.fetch = async (url, opts) => {
+        if (String(url).includes('generativelanguage.googleapis.com')) {
+          return new Response(
+            JSON.stringify({
+              candidates: [{ content: { parts: [{ text: JSON.stringify(mockAiDecision) }] } }],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return origFetch(url, opts);
+      };
+
+      const regAi = await req('POST', '/auth/register', {
+        email: 'aiverif@akwaba.ci',
+        password: 'Password123',
+        name: 'Yao',
+        age: 29,
+        gender: 'man',
+        lookingFor: 'women',
+        commune: 'Yopougon',
+        city: 'Abidjan',
+      });
+      const yaoToken = regAi.json.data.token;
+
+      // Rejected by Gemini Vision
+      const rejRes = await req(
+        'POST',
+        '/safety/verify-selfie',
+        { challengeCode: 'OPEN_PALM', imageBase64: validPng },
+        yaoToken
+      );
+      assert.equal(rejRes.status, 200);
+      assert.equal(rejRes.json.data.status, 'rejected');
+      assert.equal(rejRes.json.data.verified225, false);
+
+      // Approved by Gemini Vision
+      mockAiDecision = {
+        face_detected: true,
+        gesture_matches: true,
+        matches_profile_photo: true,
+        confidence: 0.94,
+        reason: 'Visage humain réel et main ouverte clairement visibles.',
+      };
+      const okRes = await req(
+        'POST',
+        '/safety/verify-selfie',
+        { challengeCode: 'OPEN_PALM', imageBase64: validPng },
+        yaoToken
+      );
+      assert.equal(okRes.status, 200);
+      assert.equal(okRes.json.data.status, 'verified');
+      assert.equal(okRes.json.data.verified225, true);
+    } finally {
+      globalThis.fetch = origFetch;
+      config.selfieAi.geminiApiKey = origGeminiKey;
+      // Clean up test private verification files created during this test
+      const privDir = path.join(config.rootDir, 'data/private_verifications');
+      if (fs.existsSync(privDir)) {
+        for (const f of fs.readdirSync(privDir)) {
+          if (f.startsWith('ver_')) {
+            try { fs.unlinkSync(path.join(privDir, f)); } catch { /* ignore */ }
+          }
+        }
+      }
     }
   });
 });

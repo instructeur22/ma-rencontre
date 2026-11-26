@@ -6,6 +6,7 @@ import { getDb } from '../db/database.js';
 import { requireAuth, signAuthToken } from '../middleware/auth.js';
 import { creditCauris, getEffectiveSubscriptionTier } from '../services/monetizationService.js';
 import { computeTrustScore } from '../services/antiScamService.js';
+import { requestWhatsAppOtp, verifyWhatsAppOtp } from '../services/whatsappOtpService.js';
 import {
   ABIDJAN_COMMUNES,
   AVATAR_PRESETS,
@@ -246,23 +247,70 @@ router.get('/me', requireAuth, (req, res) => {
   });
 });
 
-router.post('/phone-verify', requireAuth, (req, res) => {
-  const { phone } = req.body || {};
-  if (!phone || String(phone).trim().length < 8) {
-    return res.status(422).json({
+router.post('/phone-otp/request', requireAuth, async (req, res) => {
+  try {
+    const { phone } = req.body || {};
+    const db = getDb();
+    const result = await requestWhatsAppOtp(db, req.user.id, phone);
+    if (!result.ok) {
+      return res.status(result.status).json({
+        success: false,
+        error: {
+          code: result.code,
+          message: result.message,
+          ...(result.retryAfterSec ? { retryAfterSec: result.retryAfterSec } : {}),
+        },
+      });
+    }
+    return res.json({ success: true, data: result.data });
+  } catch (err) {
+    return res.status(502).json({
       success: false,
-      error: { code: 'INVALID_PHONE', message: 'Numéro de téléphone invalide (ex: +2250700000000).' },
+      error: { code: 'WHATSAPP_DELIVERY_FAILED', message: err.message },
     });
   }
+});
+
+router.post('/phone-otp/verify', requireAuth, (req, res) => {
+  const { phone, code } = req.body || {};
   const db = getDb();
-  db.prepare('UPDATE users SET phone = ?, phone_verified = 1 WHERE id = ?').run(String(phone).trim(), req.user.id);
-  const newScore = computeTrustScore(db, req.user.id);
+  const result = verifyWhatsAppOtp(db, req.user.id, phone, code);
+  if (!result.ok) {
+    return res.status(result.status).json({
+      success: false,
+      error: {
+        code: result.code,
+        message: result.message,
+        ...(result.remainingAttempts !== undefined ? { remainingAttempts: result.remainingAttempts } : {}),
+      },
+    });
+  }
   const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
   return res.json({
     success: true,
     data: {
-      phoneVerified: true,
-      trustScore: newScore,
+      ...result.data,
+      user: formatSelfUser(updated),
+    },
+  });
+});
+
+// Hardened legacy route: now requires a valid 6-digit WhatsApp OTP code
+router.post('/phone-verify', requireAuth, (req, res) => {
+  const { phone, code } = req.body || {};
+  const db = getDb();
+  const result = verifyWhatsAppOtp(db, req.user.id, phone, code);
+  if (!result.ok) {
+    return res.status(result.status).json({
+      success: false,
+      error: { code: result.code, message: result.message },
+    });
+  }
+  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  return res.json({
+    success: true,
+    data: {
+      ...result.data,
       user: formatSelfUser(updated),
     },
   });
