@@ -77,6 +77,16 @@ router.post('/payments/checkout', requireAuth, async (req, res) => {
     });
   }
 
+  if (config.nodeEnv === 'production' && config.geniusPay.useLocalSimulator) {
+    return res.status(503).json({
+      success: false,
+      error: {
+        code: 'PAYMENT_UNAVAILABLE',
+        message: 'Les paiements GeniusPay ne sont pas encore configurés sur ce serveur.',
+      },
+    });
+  }
+
   try {
     const db = getDb();
     const orderId = `ORD-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
@@ -200,6 +210,9 @@ router.get('/payments/:reference/status', requireAuth, async (req, res) => {
 
 // Sandbox checkout completion endpoint: constructs a REAL GeniusPay HMAC-SHA256 webhook & processes it
 router.post('/payments/sandbox/complete', requireAuth, (req, res) => {
+  if (config.nodeEnv === 'production' || (!config.geniusPay.useLocalSimulator && config.geniusPay.env === 'live')) {
+    return res.status(403).json({ success: false, error: { code: 'SANDBOX_DISABLED', message: 'Simulation interdite en production.' } });
+  }
   const { reference, paymentMethod = 'wave', outcome = 'success' } = req.body || {};
   if (!reference) {
     return res.status(422).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'reference requise.' } });
@@ -208,10 +221,6 @@ router.post('/payments/sandbox/complete', requireAuth, (req, res) => {
   const order = db.prepare('SELECT * FROM payment_orders WHERE reference = ? AND user_id = ?').get(reference, req.user.id);
   if (!order) {
     return res.status(404).json({ success: false, error: { code: 'TRANSACTION_NOT_FOUND', message: 'Commande introuvable.' } });
-  }
-
-  if (!config.geniusPay.useLocalSimulator && config.geniusPay.env === 'live') {
-    return res.status(403).json({ success: false, error: { code: 'SANDBOX_ONLY', message: 'Simulation interdite en mode Live.' } });
   }
 
   const eventType = outcome === 'success' ? 'payment.success' : 'payment.failed';

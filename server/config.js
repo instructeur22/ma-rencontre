@@ -34,17 +34,37 @@ if (nodeEnv === 'production') {
   }
 }
 
+const dataDir = path.resolve(ROOT_DIR, process.env.DATA_DIR || './data');
+const dbPath = path.resolve(ROOT_DIR, process.env.DB_PATH || path.join(dataDir, 'akwaba.sqlite'));
+const uploadsDir = path.resolve(ROOT_DIR, process.env.UPLOADS_DIR || path.join(dataDir, 'uploads'));
+
+let trustProxy = nodeEnv === 'production' ? 1 : false;
+if (process.env.TRUST_PROXY !== undefined && process.env.TRUST_PROXY !== '') {
+  if (process.env.TRUST_PROXY === 'true') trustProxy = true;
+  else if (process.env.TRUST_PROXY === 'false') trustProxy = false;
+  else if (/^\d+$/.test(process.env.TRUST_PROXY)) trustProxy = Number(process.env.TRUST_PROXY);
+  else trustProxy = process.env.TRUST_PROXY;
+}
+
 export const config = {
   rootDir: ROOT_DIR,
+  dataDir,
+  uploadsDir,
   port,
   nodeEnv,
   appBaseUrl,
-  corsOrigin: process.env.CORS_ORIGIN || '*',
+  trustProxy,
+  corsOrigin: process.env.CORS_ORIGIN || (nodeEnv === 'production' ? appBaseUrl : '*'),
   allowDemoLogin: process.env.ALLOW_DEMO_LOGIN === 'true' || nodeEnv !== 'production',
   jwtSecret: process.env.JWT_SECRET || 'akwaba_dev_secret_change_in_production_225',
   adminModerationSecret:
     process.env.ADMIN_MODERATION_SECRET || (nodeEnv !== 'production' ? 'akwaba_dev_mod_225' : ''),
-  dbPath: path.resolve(ROOT_DIR, process.env.DB_PATH || './data/akwaba.sqlite'),
+  dbPath,
+  email: {
+    resendApiKey: process.env.RESEND_API_KEY || '',
+    fromAddress: process.env.EMAIL_FROM || 'AKWABA <no-reply@akwaba.ci>',
+    webhookUrl: process.env.EMAIL_WEBHOOK_URL || '',
+  },
   geniusPay: {
     env: process.env.GENIUSPAY_ENV || 'sandbox',
     baseUrl: process.env.GENIUSPAY_BASE_URL || 'https://pay.genius.ci/api/v1/merchant',

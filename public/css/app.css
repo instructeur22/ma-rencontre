@@ -1987,6 +1987,84 @@ textarea:focus {
   }
 }
 
+.login-extra-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.45rem;
+}
+
+.terms-check-line {
+  align-items: flex-start;
+  font-size: 0.81rem;
+  line-height: 1.4;
+  margin: 0.35rem 0 0.85rem;
+}
+
+.legal-link-btn {
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+  display: inline;
+  text-align: left;
+}
+
+.legal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  font-size: 0.87rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+  max-height: 55vh;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.security-form-stack {
+  margin-top: 0.75rem;
+}
+
+.privacy-actions-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.danger-text {
+  color: #991B1B;
+}
+
+.btn-danger {
+  background: #991B1B;
+  color: #fff;
+  border: 1px solid #7F1D1D;
+  border-radius: 999px;
+  padding: 0.62rem 1.15rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-out), transform 140ms var(--ease-out);
+}
+
+.btn-danger:hover {
+  background: #7F1D1D;
+}
+
+.btn-danger:active {
+  transform: scale(0.97);
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled,
+.btn-danger:disabled {
+  opacity: 0.62;
+  cursor: wait;
+}
+
 .passport-edit-block,
 .quiz-fields-block,
 .avatar-studio-block {

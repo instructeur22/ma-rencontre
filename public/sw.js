@@ -1,4 +1,4 @@
-const CACHE_NAME = 'akwaba-v3';
+const CACHE_NAME = 'akwaba-v4';
 const PRECACHE_URLS = [
   '/',
   '/css/app.css',
@@ -7,6 +7,8 @@ const PRECACHE_URLS = [
   '/js/audio.js',
   '/js/icons.js',
   '/manifest.json',
+  '/assets/icons/icon-192.png',
+  '/assets/icons/icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {
@@ -24,6 +26,14 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.url.includes('/api/') || event.request.method !== 'GET') return;
+  const url = event.request.url;
+  if (
+    event.request.method !== 'GET' ||
+    url.includes('/api/') ||
+    url.includes('/uploads/') ||
+    url.includes('/admin')
+  ) {
+    return;
+  }
   event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
 });

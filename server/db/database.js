@@ -10,6 +10,13 @@ const __dirname = path.dirname(__filename);
 let dbInstance = null;
 
 function ensureSchemaMigrations(db) {
+  const userCols = new Set(
+    db.prepare('PRAGMA table_info(users)').all().map((c) => c.name)
+  );
+  if (!userCols.has('terms_accepted_at')) {
+    db.exec("ALTER TABLE users ADD COLUMN terms_accepted_at TEXT DEFAULT '';");
+  }
+
   const verifCols = new Set(
     db.prepare('PRAGMA table_info(safety_verifications)').all().map((c) => c.name)
   );
@@ -36,7 +43,14 @@ export function getDb(customPath = null) {
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   }
   const db = new DatabaseSync(targetPath);
-  db.exec('PRAGMA busy_timeout = 5000;');
+  db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;');
+  if (targetPath !== ':memory:') {
+    try {
+      db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
+    } catch {
+      db.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = NORMAL;');
+    }
+  }
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
   db.exec(schema);
   ensureSchemaMigrations(db);

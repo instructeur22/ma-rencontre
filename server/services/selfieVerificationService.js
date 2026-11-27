@@ -17,7 +17,7 @@ const MIME_BY_EXT = {
 };
 
 export function getPrivateVerificationsDir() {
-  return path.join(config.rootDir, 'data', 'private_verifications');
+  return path.join(config.dataDir, 'private_verifications');
 }
 
 export function validateSelfieImageBase64(rawInput) {
@@ -76,11 +76,21 @@ export function validateSelfieImageBase64(rawInput) {
 function readLocalProfilePhoto(avatarUrl) {
   if (!avatarUrl || typeof avatarUrl !== 'string') return null;
   const trimmed = avatarUrl.trim();
-  if (!trimmed.startsWith('/assets/') && !trimmed.startsWith('/uploads/')) return null;
   if (trimmed.includes('..')) return null;
 
-  const fullPath = path.join(config.rootDir, 'public', trimmed.replace(/^\/+/, ''));
-  if (!fs.existsSync(fullPath)) return null;
+  let fullPath = null;
+  if (trimmed.startsWith('/uploads/')) {
+    const rel = trimmed.replace(/^\/uploads\//, '');
+    const inUploadsDir = path.join(config.uploadsDir, rel);
+    const inPublicUploads = path.join(config.rootDir, 'public', trimmed.replace(/^\/+/, ''));
+    fullPath = fs.existsSync(inUploadsDir) ? inUploadsDir : inPublicUploads;
+  } else if (trimmed.startsWith('/assets/')) {
+    fullPath = path.join(config.rootDir, 'public', trimmed.replace(/^\/+/, ''));
+  } else {
+    return null;
+  }
+
+  if (!fullPath || !fs.existsSync(fullPath)) return null;
   try {
     const buf = fs.readFileSync(fullPath);
     if (buf.byteLength > MAX_SELFIE_BYTES || buf.byteLength < MIN_SELFIE_BYTES) return null;

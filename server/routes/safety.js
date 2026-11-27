@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { config } from '../config.js';
-import { getDb } from '../db/database.js';
+import { getDb, normalizeRows } from '../db/database.js';
 import { requireAuth } from '../middleware/auth.js';
+import { createRateLimiter } from '../middleware/rateLimit.js';
 import { computeTrustScore, getDailyChallenge } from '../services/antiScamService.js';
 import {
   getLatestUserVerification,
@@ -11,9 +12,19 @@ import {
   resolvePrivateSelfieFile,
   reviewVerification,
 } from '../services/selfieVerificationService.js';
-import { formatSelfUser } from './auth.js';
+import { formatSelfUser, purgeUserAccount } from './auth.js';
 
 const router = express.Router();
+
+const adminBruteForceLimiter = createRateLimiter({
+  windowMs: 15 * 60_000,
+  max: 5,
+  onlyFailed: true,
+  code: 'ADMIN_RATE_LIMITED',
+  message: 'Trop de tentatives admin erronées. Accès temporairement bloqué (15 min).',
+});
+
+router.use('/admin', adminBruteForceLimiter);
 
 function requireModerationAdmin(req, res, next) {
   const configured = config.adminModerationSecret;
@@ -124,6 +135,59 @@ router.post('/admin/verifications/:id/review', requireModerationAdmin, (req, res
     success: true,
     data: result.data,
   });
+});
+
+router.get('/admin/reports', requireModerationAdmin, (_req, res) => {
+  const db = getDb();
+  const reports = normalizeRows(
+    db
+      .prepare(
+        `SELECT br.id, br.action_type, br.reason, br.created_at,
+                rep.id AS reporter_id, rep.name AS reporter_name,
+                tgt.id AS target_id, tgt.name AS target_name, tgt.age AS target_age,
+                tgt.commune AS target_commune, tgt.avatar_url AS target_avatar_url,
+                tgt.trust_score AS target_trust_score, tgt.verified_225 AS target_verified_225,
+                (SELECT COUNT(*) FROM blocks_reports br2 WHERE br2.target_id = tgt.id AND br2.action_type = 'report') AS total_reports
+         FROM blocks_reports br
+         JOIN users rep ON rep.id = br.reporter_id
+         JOIN users tgt ON tgt.id = br.target_id
+         WHERE br.action_type = 'report'
+         ORDER BY br.id DESC LIMIT 50`
+      )
+      .all()
+  ).map((r) => ({
+    id: r.id,
+    actionType: r.action_type,
+    reason: r.reason,
+    createdAt: r.created_at,
+    reporterId: r.reporter_id,
+    reporterName: r.reporter_name,
+    targetId: r.target_id,
+    targetName: r.target_name,
+    targetAge: r.target_age,
+    targetCommune: r.target_commune,
+    targetAvatarUrl: r.target_avatar_url,
+    targetTrustScore: r.target_trust_score,
+    targetVerified225: Boolean(r.target_verified_225),
+    totalReports: Number(r.total_reports || 1),
+  }));
+
+  return res.json({
+    success: true,
+    data: { reports },
+  });
+});
+
+router.delete('/admin/users/:id', requireModerationAdmin, (req, res) => {
+  const db = getDb();
+  const result = purgeUserAccount(db, req.params.id);
+  if (!result.deleted) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'USER_NOT_FOUND', message: 'Compte introuvable ou déjà supprimé.' },
+    });
+  }
+  return res.json({ success: true, data: result });
 });
 
 router.post('/report', requireAuth, (req, res) => {

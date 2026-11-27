@@ -440,7 +440,7 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
     assert.equal(goodAvatar.status, 200);
     const url = goodAvatar.json.data.avatarUrl;
     assert.ok(url.startsWith('/uploads/avatars/'));
-    const diskPath = path.join(config.rootDir, 'public', url.replace(/^\/+/, ''));
+    const diskPath = path.join(config.uploadsDir, url.replace(/^\/uploads\//, ''));
     assert.ok(fs.existsSync(diskPath));
     fs.unlinkSync(diskPath);
   });

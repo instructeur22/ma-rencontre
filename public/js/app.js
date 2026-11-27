@@ -59,10 +59,84 @@ const state = {
   selfieStream: null,
   pendingSelfieDataUrl: null,
   pendingWaPhone: '',
-  adminBlobUrls: [],
+  publicConfig: {
+    demoEnabled: false,
+    paymentSandboxUi: false,
+    whatsappConfigured: false,
+    emailResetConfigured: false,
+  },
+  lastModalOpener: null,
   typingTimer: null,
   lastTypingSentAt: 0,
 };
+
+async function withBusyButton(btn, fn) {
+  if (!btn || btn.disabled) return;
+  btn.disabled = true;
+  try {
+    return await fn();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function getFocusableInModal(modal) {
+  return [...modal.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter((el) => el.offsetParent !== null);
+}
+
+function openModal(modalOrId) {
+  const modal = typeof modalOrId === 'string' ? document.getElementById(modalOrId) : modalOrId;
+  if (!modal) return;
+  state.lastModalOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modal.classList.add('active');
+  requestAnimationFrame(() => {
+    const focusables = getFocusableInModal(modal);
+    if (focusables.length > 0) focusables[0].focus();
+  });
+}
+
+function closeModal(modalOrId) {
+  const modal = typeof modalOrId === 'string' ? document.getElementById(modalOrId) : modalOrId;
+  if (!modal) return;
+  modal.classList.remove('active');
+  if (state.lastModalOpener && typeof state.lastModalOpener.focus === 'function' && state.lastModalOpener.offsetParent !== null) {
+    state.lastModalOpener.focus();
+  }
+  state.lastModalOpener = null;
+}
+
+function applyPublicConfig(cfg) {
+  state.publicConfig = {
+    demoEnabled: Boolean(cfg?.demoEnabled),
+    paymentSandboxUi: Boolean(cfg?.paymentSandboxUi),
+    whatsappConfigured: Boolean(cfg?.whatsappConfigured),
+    emailResetConfigured: Boolean(cfg?.emailResetConfigured),
+  };
+
+  const demoAllowed = state.publicConfig.demoEnabled;
+  document.getElementById('demo-entry-box')?.classList.toggle('hidden', !demoAllowed);
+  document.getElementById('login-demo-hint')?.classList.toggle('hidden', !demoAllowed);
+  document.getElementById('btn-demo-bio-voice')?.classList.toggle('hidden', !demoAllowed);
+  document.getElementById('profile-avatar-presets')?.classList.toggle('hidden', !demoAllowed);
+  document.getElementById('avatar-url-field')?.classList.toggle('hidden', !demoAllowed);
+
+  if (demoAllowed) {
+    const emailEl = document.getElementById('login-email');
+    const pwdEl = document.getElementById('login-password');
+    if (emailEl && !emailEl.value) emailEl.value = 'kouame@akwaba.ci';
+    if (pwdEl && !pwdEl.value) pwdEl.value = 'Akwaba225!';
+  }
+}
+
+async function loadPublicConfig() {
+  try {
+    const cfg = await apiFetch('/public-config');
+    applyPublicConfig(cfg);
+  } catch {
+    // Keep secure fail-closed defaults if config endpoint fails
+  }
+}
 
 function escapeHtml(str) {
   return String(str ?? '')
@@ -417,7 +491,7 @@ function openReactionModal(profile, quotedText, suggestedReply) {
   document.getElementById('reaction-modal-title').textContent = `Réagir au profil de ${profile.name}`;
   document.getElementById('react-trait-quote').textContent = `"${quotedText}"`;
   document.getElementById('react-note-input').value = suggestedReply;
-  document.getElementById('reaction-modal').classList.add('active');
+  openModal('reaction-modal');
 }
 
 function renderDiscoverCard() {
@@ -649,14 +723,14 @@ function openMatchCelebration(matchObj) {
   document.getElementById('match-partner-img').src = matchObj.partner.avatarUrl;
 
   document.getElementById('btn-match-open-chat').onclick = () => {
-    modal.classList.remove('active');
+    closeModal(modal);
     state.activeMatchId = matchObj.id;
     switchView('chat');
   };
   document.getElementById('btn-match-continue').onclick = () => {
-    modal.classList.remove('active');
+    closeModal(modal);
   };
-  modal.classList.add('active');
+  openModal(modal);
 }
 
 function openDirectMessageModal(profile, presetText = '') {
@@ -665,7 +739,7 @@ function openDirectMessageModal(profile, presetText = '') {
   document.getElementById('dm-target-label').textContent =
     `Écrivez directement à ${profile.name} (${profile.commune}) avant même un match.`;
   document.getElementById('dm-message-input').value = presetText;
-  document.getElementById('dm-modal').classList.add('active');
+  openModal('dm-modal');
 }
 
 // ---------------- VIEW 2: CE SOIR & SAFE DATES ----------------
@@ -1139,7 +1213,7 @@ async function openSafeDateModal() {
   select.onchange = updatePreview;
   updatePreview();
   document.getElementById('sd-note-input').value = '';
-  document.getElementById('safedate-modal').classList.add('active');
+  openModal('safedate-modal');
 }
 
 // ---------------- VIEW 5: STORE & GENIUSPAY ----------------
@@ -1305,13 +1379,19 @@ function renderGeniusPayModal() {
     });
   });
 
-  modal.classList.add('active');
+  openModal(modal);
 }
 
 // ---------------- VIEW 6: PROFILE & BOUCLIER BABI ----------------
 function renderAvatarPresets(currentUrl) {
   const host = document.getElementById('profile-avatar-presets');
   if (!host) return;
+  if (!state.publicConfig.demoEnabled) {
+    host.classList.add('hidden');
+    host.innerHTML = '';
+    return;
+  }
+  host.classList.remove('hidden');
   const presets = state.meta?.avatarPresets || [];
   host.innerHTML = presets
     .map(
@@ -1439,6 +1519,7 @@ async function loadProfileEditor() {
 document.addEventListener('DOMContentLoaded', () => {
   hydrateStaticIcons(document);
   populateAllLocationSelects();
+  loadPublicConfig();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -1462,88 +1543,196 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Modal Escape & Backdrop Close
+  // Modal Escape, Backdrop Close & WCAG Focus Trap
   document.querySelectorAll('.modal-backdrop').forEach((backdrop) => {
     backdrop.addEventListener('click', (e) => {
-      if (e.target === backdrop) backdrop.classList.remove('active');
+      if (e.target === backdrop) closeModal(backdrop);
     });
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      document.querySelectorAll('.modal-backdrop.active').forEach((m) => m.classList.remove('active'));
+    const activeModal = document.querySelector('.modal-backdrop.active');
+    if (e.key === 'Escape' && activeModal) {
+      closeModal(activeModal);
+      return;
+    }
+    if (e.key === 'Tab' && activeModal) {
+      const focusables = getFocusableInModal(activeModal);
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !activeModal.contains(document.activeElement))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
   });
 
   // Auth Tabs
   document.querySelectorAll('.auth-tab').forEach((tab) => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('.auth-tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.auth-tab').forEach((t) => {
+        t.classList.remove('active');
+        t.setAttribute('aria-selected', 'false');
+      });
       tab.classList.add('active');
+      tab.setAttribute('aria-selected', 'true');
       const isLogin = tab.dataset.authMode === 'login';
       document.getElementById('login-form').classList.toggle('hidden', !isLogin);
       document.getElementById('register-form').classList.toggle('hidden', isLogin);
     });
   });
 
-  // Demo quick buttons
-  document.getElementById('btn-demo-kouame').addEventListener('click', async () => {
-    const res = await apiFetch('/auth/demo', { method: 'POST', body: JSON.stringify({ persona: 'kouame' }) });
-    setToken(res.token);
-    await bootstrapSession();
-    showToast('Akwaba Kouamé !');
+  // Legal & Privacy Modal
+  document.getElementById('btn-open-legal-modal')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openModal('legal-modal');
+  });
+  document.getElementById('btn-view-legal-profile')?.addEventListener('click', () => openModal('legal-modal'));
+  document.getElementById('btn-close-legal-modal')?.addEventListener('click', () => closeModal('legal-modal'));
+  document.getElementById('btn-legal-accept')?.addEventListener('click', () => closeModal('legal-modal'));
+
+  // Forgot Password Modal
+  const closeForgotModal = () => closeModal('forgot-password-modal');
+  document.getElementById('btn-forgot-password')?.addEventListener('click', () => {
+    document.getElementById('forgot-confirm-form').classList.add('hidden');
+    document.getElementById('forgot-dev-hint').classList.add('hidden');
+    document.getElementById('forgot-identifier').value = document.getElementById('login-email').value.trim();
+    openModal('forgot-password-modal');
+  });
+  document.getElementById('btn-close-forgot-modal')?.addEventListener('click', closeForgotModal);
+  document.getElementById('btn-forgot-cancel')?.addEventListener('click', closeForgotModal);
+
+  document.getElementById('forgot-request-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-forgot-send');
+    await withBusyButton(btn, async () => {
+      try {
+        const identifier = document.getElementById('forgot-identifier').value.trim();
+        const res = await apiFetch('/auth/password-reset/request', {
+          method: 'POST',
+          body: JSON.stringify({ identifier }),
+        });
+        document.getElementById('forgot-confirm-form').classList.remove('hidden');
+        const hint = document.getElementById('forgot-dev-hint');
+        if (res.simulated && res.devResetCode) {
+          hint.textContent = `Simulateur local — Code de réinitialisation : ${res.devResetCode}`;
+          hint.classList.remove('hidden');
+        } else {
+          hint.textContent = res.message;
+          hint.classList.remove('hidden');
+        }
+        showToast(res.message);
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
   });
 
-  document.getElementById('btn-demo-aya').addEventListener('click', async () => {
-    const res = await apiFetch('/auth/demo', { method: 'POST', body: JSON.stringify({ persona: 'aya' }) });
-    setToken(res.token);
-    await bootstrapSession();
-    showToast('Akwaba Aya !');
+  document.getElementById('forgot-confirm-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-forgot-confirm');
+    await withBusyButton(btn, async () => {
+      try {
+        const identifier = document.getElementById('forgot-identifier').value.trim();
+        const code = document.getElementById('forgot-code').value.trim();
+        const newPassword = document.getElementById('forgot-new-password').value;
+        await apiFetch('/auth/password-reset/confirm', {
+          method: 'POST',
+          body: JSON.stringify({ identifier, code, newPassword }),
+        });
+        closeForgotModal();
+        showToast('Mot de passe réinitialisé ! Vous pouvez vous connecter.');
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+  });
+
+  // Demo quick buttons
+  const kouameBtn = document.getElementById('btn-demo-kouame');
+  kouameBtn.addEventListener('click', async () => {
+    await withBusyButton(kouameBtn, async () => {
+      try {
+        const res = await apiFetch('/auth/demo', { method: 'POST', body: JSON.stringify({ persona: 'kouame' }) });
+        setToken(res.token);
+        await bootstrapSession();
+        showToast('Akwaba Kouamé !');
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+  });
+
+  const ayaBtn = document.getElementById('btn-demo-aya');
+  ayaBtn.addEventListener('click', async () => {
+    await withBusyButton(ayaBtn, async () => {
+      try {
+        const res = await apiFetch('/auth/demo', { method: 'POST', body: JSON.stringify({ persona: 'aya' }) });
+        setToken(res.token);
+        await bootstrapSession();
+        showToast('Akwaba Aya !');
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
   });
 
   // Login & Register
   document.getElementById('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    try {
-      const res = await apiFetch('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({
-          email: document.getElementById('login-email').value,
-          password: document.getElementById('login-password').value,
-        }),
-      });
-      setToken(res.token);
-      await bootstrapSession();
-    } catch (err) {
-      showToast(err.message);
-    }
+    const btn = e.currentTarget.querySelector('button[type="submit"]');
+    await withBusyButton(btn, async () => {
+      try {
+        const res = await apiFetch('/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({
+            email: document.getElementById('login-email').value,
+            password: document.getElementById('login-password').value,
+          }),
+        });
+        setToken(res.token);
+        await bootstrapSession();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
   });
 
   document.getElementById('register-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    try {
-      const commune = document.getElementById('reg-commune').value;
-      const city = resolveCityFromCommune(commune);
-      const res = await apiFetch('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: document.getElementById('reg-name').value,
-          age: Number(document.getElementById('reg-age').value),
-          gender: document.getElementById('reg-gender').value,
-          lookingFor: document.getElementById('reg-looking').value,
-          commune,
-          city,
-          intention: document.getElementById('reg-intention').value,
-          email: document.getElementById('reg-email').value,
-          password: document.getElementById('reg-password').value,
-          referralCodeUsed: document.getElementById('reg-referral').value,
-        }),
-      });
-      setToken(res.token);
-      await bootstrapSession();
-      showToast('Bienvenue sur AKWABA ! +50 Cauris offerts.');
-    } catch (err) {
-      showToast(err.message);
-    }
+    const btn = e.currentTarget.querySelector('button[type="submit"]');
+    await withBusyButton(btn, async () => {
+      try {
+        const commune = document.getElementById('reg-commune').value;
+        const city = resolveCityFromCommune(commune);
+        const res = await apiFetch('/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: document.getElementById('reg-name').value,
+            age: Number(document.getElementById('reg-age').value),
+            gender: document.getElementById('reg-gender').value,
+            lookingFor: document.getElementById('reg-looking').value,
+            commune,
+            city,
+            intention: document.getElementById('reg-intention').value,
+            email: document.getElementById('reg-email').value,
+            phone: document.getElementById('reg-phone').value,
+            password: document.getElementById('reg-password').value,
+            referralCodeUsed: document.getElementById('reg-referral').value,
+            acceptedTerms: document.getElementById('reg-terms').checked,
+          }),
+        });
+        setToken(res.token);
+        await bootstrapSession();
+        showToast('Bienvenue sur AKWABA ! +50 Cauris offerts.');
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
   });
 
   // Logout
@@ -1640,7 +1829,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // DM Modal
-  const closeDmModal = () => document.getElementById('dm-modal').classList.remove('active');
+  const closeDmModal = () => closeModal('dm-modal');
   document.getElementById('btn-close-dm-modal').addEventListener('click', closeDmModal);
   document.getElementById('btn-dm-cancel').addEventListener('click', closeDmModal);
   document.getElementById('dm-form').addEventListener('submit', async (e) => {
@@ -1669,7 +1858,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Contextual Reaction Modal
-  const closeReactModal = () => document.getElementById('reaction-modal').classList.remove('active');
+  const closeReactModal = () => closeModal('reaction-modal');
   document.getElementById('btn-close-reaction-modal').addEventListener('click', closeReactModal);
   document.getElementById('btn-react-cancel').addEventListener('click', closeReactModal);
   document.getElementById('reaction-form').addEventListener('submit', async (e) => {
@@ -1681,7 +1870,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Safe Date Invite Modal
-  const closeSdModal = () => document.getElementById('safedate-modal').classList.remove('active');
+  const closeSdModal = () => closeModal('safedate-modal');
   document.getElementById('btn-close-sd-modal').addEventListener('click', closeSdModal);
   document.getElementById('btn-sd-cancel').addEventListener('click', closeSdModal);
   document.querySelectorAll('.sd-preset-chip').forEach((chip) => {
@@ -1734,11 +1923,11 @@ document.addEventListener('DOMContentLoaded', () => {
   chatInput.addEventListener('input', () => {
     const now = Date.now();
     if (now - state.lastTypingSentAt < 1800) return;
-    if (!state.activeMatchId || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+    if (!state.activeMatchId || !state.ws?.isOpen?.()) return;
     const match = state.matches.find((m) => m.id === state.activeMatchId);
     if (!match) return;
     state.lastTypingSentAt = now;
-    state.ws.send(JSON.stringify({ type: 'typing', matchId: match.id, recipientId: match.partner.id }));
+    state.ws.send({ type: 'typing', matchId: match.id, recipientId: match.partner.id });
   });
 
   document.getElementById('chat-send-form').addEventListener('submit', async (e) => {
@@ -1791,13 +1980,17 @@ document.addEventListener('DOMContentLoaded', () => {
       chatVoiceBtn.classList.add('recording');
       chatVoiceBtn.textContent = 'Stop';
     } catch {
-      const demo = generateDemoVoiceBase64();
-      await apiFetch(`/chats/${state.activeMatchId}/voice`, {
-        method: 'POST',
-        body: JSON.stringify(demo),
-      });
-      await loadConversation(state.activeMatchId);
-      showToast('Note vocale envoyée (mode micro démo)');
+      if (state.publicConfig.demoEnabled) {
+        const demo = generateDemoVoiceBase64();
+        await apiFetch(`/chats/${state.activeMatchId}/voice`, {
+          method: 'POST',
+          body: JSON.stringify(demo),
+        });
+        await loadConversation(state.activeMatchId);
+        showToast('Note vocale envoyée (mode micro démo)');
+      } else {
+        showToast('Micro indisponible : autorisez l’accès au microphone pour envoyer un vocal.');
+      }
     }
   });
 
@@ -1813,68 +2006,72 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btn-close-gp-modal').addEventListener('click', () => {
-    document.getElementById('geniuspay-modal').classList.remove('active');
+    closeModal('geniuspay-modal');
   });
 
-  document.getElementById('btn-gp-initiate').addEventListener('click', async () => {
-    try {
-      const phone = document.getElementById('gp-phone-input').value.trim();
-      let checkoutData;
-      if (state.gpContext.mode === 'booking') {
-        checkoutData = await apiFetch('/dates/bookings', {
-          method: 'POST',
-          body: JSON.stringify({
-            spotId: state.gpContext.spotId,
-            guestsCount: 2,
-            paymentMethod: state.gpContext.selectedMethod,
-            customerPhone: phone,
-          }),
-        });
-      } else {
-        checkoutData = await apiFetch('/payments/checkout', {
-          method: 'POST',
-          body: JSON.stringify({
-            itemCode: state.gpContext.itemCode,
-            paymentMethod: state.gpContext.selectedMethod,
-            customerPhone: phone,
-          }),
-        });
+  const gpInitBtn = document.getElementById('btn-gp-initiate');
+  gpInitBtn.addEventListener('click', async () => {
+    await withBusyButton(gpInitBtn, async () => {
+      try {
+        const phone = document.getElementById('gp-phone-input').value.trim();
+        let checkoutData;
+        if (state.gpContext.mode === 'booking') {
+          checkoutData = await apiFetch('/dates/bookings', {
+            method: 'POST',
+            body: JSON.stringify({
+              spotId: state.gpContext.spotId,
+              guestsCount: 2,
+              paymentMethod: state.gpContext.selectedMethod,
+              customerPhone: phone,
+            }),
+          });
+        } else {
+          checkoutData = await apiFetch('/payments/checkout', {
+            method: 'POST',
+            body: JSON.stringify({
+              itemCode: state.gpContext.itemCode,
+              paymentMethod: state.gpContext.selectedMethod,
+              customerPhone: phone,
+            }),
+          });
+        }
+
+        state.gpContext.activeReference = checkoutData.reference;
+        document.getElementById('gp-ref-code').textContent = checkoutData.reference;
+        const isSimulated = Boolean(checkoutData.simulated);
+        const allowSandboxButtons = Boolean(isSimulated && state.publicConfig.paymentSandboxUi);
+        if (!isSimulated) {
+          localStorage.setItem('akwaba_pending_gp_ref', checkoutData.reference);
+        }
+
+        document.getElementById('gp-checkout-status-msg').textContent = isSimulated
+          ? `Session Simulateur local prête (${state.gpContext.selectedMethod}). Validez ci-dessous pour déclencher le Webhook HMAC-SHA256.`
+          : `Session GeniusPay (${checkoutData.environment || 'sandbox'}) créée. Finalisez le paiement sur la page sécurisée GeniusPay ci-dessous, puis vérifiez le statut.`;
+
+        const extLink = document.getElementById('gp-external-link');
+        const checkBtn = document.getElementById('btn-gp-check-status');
+        const simOkBtn = document.getElementById('btn-gp-confirm-sandbox');
+        const simFailBtn = document.getElementById('btn-gp-fail-sandbox');
+
+        if (!isSimulated && checkoutData.checkoutUrl) {
+          extLink.href = checkoutData.checkoutUrl;
+          extLink.classList.remove('hidden');
+          checkBtn.classList.remove('hidden');
+          simOkBtn.classList.add('hidden');
+          simFailBtn.classList.add('hidden');
+        } else {
+          extLink.classList.add('hidden');
+          checkBtn.classList.add('hidden');
+          simOkBtn.classList.toggle('hidden', !allowSandboxButtons);
+          simFailBtn.classList.toggle('hidden', !allowSandboxButtons);
+        }
+
+        document.getElementById('gp-step-select').classList.add('hidden');
+        document.getElementById('gp-step-checkout').classList.remove('hidden');
+      } catch (err) {
+        showToast(err.message);
       }
-
-      state.gpContext.activeReference = checkoutData.reference;
-      document.getElementById('gp-ref-code').textContent = checkoutData.reference;
-      const isSimulated = Boolean(checkoutData.simulated);
-      if (!isSimulated) {
-        localStorage.setItem('akwaba_pending_gp_ref', checkoutData.reference);
-      }
-
-      document.getElementById('gp-checkout-status-msg').textContent = isSimulated
-        ? `Session Simulateur local prête (${state.gpContext.selectedMethod}). Validez ci-dessous pour déclencher le Webhook HMAC-SHA256.`
-        : `Session GeniusPay (${checkoutData.environment || 'sandbox'}) créée. Finalisez le paiement sur la page sécurisée GeniusPay ci-dessous, puis vérifiez le statut.`;
-
-      const extLink = document.getElementById('gp-external-link');
-      const checkBtn = document.getElementById('btn-gp-check-status');
-      const simOkBtn = document.getElementById('btn-gp-confirm-sandbox');
-      const simFailBtn = document.getElementById('btn-gp-fail-sandbox');
-
-      if (!isSimulated && checkoutData.checkoutUrl) {
-        extLink.href = checkoutData.checkoutUrl;
-        extLink.classList.remove('hidden');
-        checkBtn.classList.remove('hidden');
-        simOkBtn.classList.add('hidden');
-        simFailBtn.classList.add('hidden');
-      } else {
-        extLink.classList.add('hidden');
-        checkBtn.classList.add('hidden');
-        simOkBtn.classList.remove('hidden');
-        simFailBtn.classList.remove('hidden');
-      }
-
-      document.getElementById('gp-step-select').classList.add('hidden');
-      document.getElementById('gp-step-checkout').classList.remove('hidden');
-    } catch (err) {
-      showToast(err.message);
-    }
+    });
   });
 
   document.getElementById('btn-gp-check-status').addEventListener('click', async () => {
@@ -1885,10 +2082,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const st = res.order?.status;
       if (st === 'completed' || res.order?.fulfilled) {
         localStorage.removeItem('akwaba_pending_gp_ref');
-        document.getElementById('geniuspay-modal').classList.remove('active');
+        closeModal('geniuspay-modal');
         state.user = res.user;
         updateTopbarUser();
-        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        if (!state.ws?.isOpen?.()) {
           showToast(`Paiement GeniusPay validé ! ${res.grantedSummary || ''}`);
         }
         if (state.activeView === 'store') loadStoreAndWallet();
@@ -1918,11 +2115,11 @@ document.addEventListener('DOMContentLoaded', () => {
         outcome,
       }),
     });
-    document.getElementById('geniuspay-modal').classList.remove('active');
+    closeModal('geniuspay-modal');
     if (outcome === 'success') {
       state.user = res.user;
       updateTopbarUser();
-      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+      if (!state.ws?.isOpen?.()) {
         showToast(`Paiement GeniusPay validé ! ${res.fulfillment?.grantedSummary || ''}`);
       }
       if (state.activeView === 'store') loadStoreAndWallet();
@@ -2028,7 +2225,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  document.getElementById('btn-submit-selfie').addEventListener('click', async () => {
+  const submitSelfieBtn = document.getElementById('btn-submit-selfie');
+  submitSelfieBtn.addEventListener('click', async () => {
     let imageDataUrl = state.pendingSelfieDataUrl;
     const videoEl = document.getElementById('selfie-video');
     const canvasEl = document.getElementById('selfie-canvas');
@@ -2051,198 +2249,131 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('selfie-camera-stage').classList.add('hidden');
     }
 
-    try {
-      const res = await apiFetch('/safety/verify-selfie', {
-        method: 'POST',
-        body: JSON.stringify({
-          challengeCode: state.safetyChallenge?.code || 'VICTORY_CHIN',
-          imageBase64: imageDataUrl,
-        }),
-      });
-      clearSelfiePreview();
-      state.user = res.user;
-      if (res.status === 'verified') {
-        showToast(`Badge Vérifié 225 activé ! Score : ${res.trustScore}/100`);
-      } else if (res.status === 'pending_review') {
-        showToast('Selfie reçu ! En attente de validation Bouclier Babi.');
-      } else {
-        showToast(`Selfie refusé : ${res.aiReason || 'veuillez reprendre un cliché net.'}`);
+    await withBusyButton(submitSelfieBtn, async () => {
+      try {
+        const res = await apiFetch('/safety/verify-selfie', {
+          method: 'POST',
+          body: JSON.stringify({
+            challengeCode: state.safetyChallenge?.code || 'VICTORY_CHIN',
+            imageBase64: imageDataUrl,
+          }),
+        });
+        clearSelfiePreview();
+        state.user = res.user;
+        if (res.status === 'verified') {
+          showToast(`Badge Vérifié 225 activé ! Score : ${res.trustScore}/100`);
+        } else if (res.status === 'pending_review') {
+          showToast('Selfie reçu ! En attente de validation Bouclier Babi.');
+        } else {
+          showToast(`Selfie refusé : ${res.aiReason || 'veuillez reprendre un cliché net.'}`);
+        }
+        loadProfileEditor();
+      } catch (err) {
+        showToast(err.message);
       }
-      loadProfileEditor();
-    } catch (err) {
-      showToast(err.message);
-    }
+    });
   });
 
   // WhatsApp OTP 2-step Phone Verification
-  document.getElementById('btn-request-wa-otp').addEventListener('click', async () => {
-    try {
-      const phone = document.getElementById('input-verify-phone').value.trim();
-      const res = await apiFetch('/auth/phone-otp/request', {
-        method: 'POST',
-        body: JSON.stringify({ phone }),
-      });
-      state.pendingWaPhone = res.phone;
-      document.getElementById('input-verify-phone').value = res.phone;
-      document.getElementById('wa-otp-verify-block').classList.remove('hidden');
-      const hintEl = document.getElementById('wa-otp-dev-hint');
-      if (res.simulated && res.devOtpCode) {
-        hintEl.textContent = `Mode simulateur local — Code OTP WhatsApp : ${res.devOtpCode}`;
-        hintEl.classList.remove('hidden');
-      } else {
-        hintEl.textContent = `Code envoyé sur WhatsApp au ${res.phone} (valable 5 min).`;
-        hintEl.classList.remove('hidden');
-      }
-      document.getElementById('input-wa-otp-code').value = '';
-      document.getElementById('input-wa-otp-code').focus();
-      showToast(`Code OTP WhatsApp envoyé vers ${res.phone}.`);
-    } catch (err) {
-      showToast(err.message);
-    }
-  });
-
-  document.getElementById('btn-confirm-wa-otp').addEventListener('click', async () => {
-    try {
-      const phone = state.pendingWaPhone || document.getElementById('input-verify-phone').value.trim();
-      const code = document.getElementById('input-wa-otp-code').value.trim();
-      const res = await apiFetch('/auth/phone-otp/verify', {
-        method: 'POST',
-        body: JSON.stringify({ phone, code }),
-      });
-      state.user = res.user;
-      document.getElementById('wa-otp-verify-block').classList.add('hidden');
-      document.getElementById('input-wa-otp-code').value = '';
-      showToast(`Numéro WhatsApp vérifié ! Score de confiance : ${res.trustScore}/100`);
-      loadProfileEditor();
-    } catch (err) {
-      showToast(err.message);
-    }
-  });
-
-  // Admin Moderation Queue (Bouclier Babi)
-  const revokeAdminBlobs = () => {
-    state.adminBlobUrls.forEach((u) => URL.revokeObjectURL(u));
-    state.adminBlobUrls = [];
-  };
-
-  const closeAdminModModal = () => {
-    revokeAdminBlobs();
-    document.getElementById('admin-mod-modal').classList.remove('active');
-  };
-
-  const loadAdminModerationQueue = async () => {
-    const secret = document.getElementById('admin-secret-input').value.trim();
-    const statusFilter = document.getElementById('admin-status-filter').value;
-    const statusMsg = document.getElementById('admin-mod-status-msg');
-    const listEl = document.getElementById('admin-mod-queue-list');
-    if (!secret) {
-      statusMsg.textContent = 'Veuillez saisir la clé X-Admin-Secret.';
-      return;
-    }
-    revokeAdminBlobs();
-    statusMsg.textContent = 'Chargement de la file Bouclier Babi...';
-    try {
-      const res = await apiFetch(`/safety/admin/verifications?status=${encodeURIComponent(statusFilter)}`, {
-        headers: { 'X-Admin-Secret': secret },
-      });
-      const items = res.verifications || [];
-      statusMsg.textContent = items.length
-        ? `${items.length} demande(s) dans la vue « ${statusFilter} ».`
-        : 'Aucune demande dans cette file.';
-
-      const statusLabels = {
-        pending_review: 'En attente',
-        verified: 'Approuvé ✓',
-        rejected: 'Refusé',
-      };
-      listEl.innerHTML = items
-        .map(
-          (v) => `
-          <article class="admin-mod-card" data-ver-id="${escapeHtml(v.id)}">
-            <div class="admin-mod-photos">
-              <div class="admin-photo-slot">
-                <span class="small muted-text">Profil</span>
-                <img src="${escapeHtml(v.userAvatarUrl)}" alt="${escapeHtml(v.userName)}" />
-              </div>
-              <div class="admin-photo-slot">
-                <span class="small muted-text">Selfie défi</span>
-                <img class="admin-private-selfie" data-ver-id="${escapeHtml(v.id)}" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'/%3E" alt="Selfie privé" />
-              </div>
-            </div>
-            <div class="admin-mod-info">
-              <div class="card-meta-line">
-                <strong>${escapeHtml(v.userName)}, ${v.userAge}</strong>
-                <span class="status-chip ${v.status === 'verified' ? '' : 'pending-chip'}">${escapeHtml(statusLabels[v.status] || v.status)}</span>
-              </div>
-              <p class="small muted-text">${escapeHtml(v.userCommune)} • Défi : ${escapeHtml(v.challengeLabel)}</p>
-              <p class="small">${escapeHtml(v.aiReason || 'En attente de revue humaine.')}</p>
-              ${
-                v.status !== 'verified'
-                  ? `<div class="admin-mod-actions">
-                       <button type="button" class="btn-primary btn-admin-decision" data-ver-id="${escapeHtml(v.id)}" data-decision="verified">Approuver 225 ✓</button>
-                       <button type="button" class="btn-secondary btn-admin-decision" data-ver-id="${escapeHtml(v.id)}" data-decision="rejected">Refuser</button>
-                     </div>`
-                  : ''
-              }
-            </div>
-          </article>
-        `
-        )
-        .join('');
-
-      // Fetch private selfie blobs using X-Admin-Secret header
-      listEl.querySelectorAll('.admin-private-selfie').forEach(async (imgEl) => {
-        const verId = imgEl.dataset.verId;
-        try {
-          const resp = await fetch(`/api/v1/safety/admin/verifications/${encodeURIComponent(verId)}/image`, {
-            headers: { 'X-Admin-Secret': secret },
-          });
-          if (!resp.ok) return;
-          const blob = await resp.blob();
-          const url = URL.createObjectURL(blob);
-          state.adminBlobUrls.push(url);
-          imgEl.src = url;
-        } catch {
-          // Ignore unavailable image
-        }
-      });
-
-      listEl.querySelectorAll('.btn-admin-decision').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const verId = btn.dataset.verId;
-          const decision = btn.dataset.decision;
-          try {
-            await apiFetch(`/safety/admin/verifications/${encodeURIComponent(verId)}/review`, {
-              method: 'POST',
-              headers: { 'X-Admin-Secret': secret },
-              body: JSON.stringify({
-                decision,
-                note: decision === 'verified' ? 'Validé par modération Bouclier Babi' : 'Geste ou visage non conforme',
-              }),
-            });
-            showToast(decision === 'verified' ? 'Selfie 225 approuvé !' : 'Selfie refusé.');
-            await loadAdminModerationQueue();
-            if (state.activeView === 'profile') loadProfileEditor();
-          } catch (err) {
-            showToast(err.message);
-          }
+  const reqWaOtpBtn = document.getElementById('btn-request-wa-otp');
+  reqWaOtpBtn.addEventListener('click', async () => {
+    await withBusyButton(reqWaOtpBtn, async () => {
+      try {
+        const phone = document.getElementById('input-verify-phone').value.trim();
+        const res = await apiFetch('/auth/phone-otp/request', {
+          method: 'POST',
+          body: JSON.stringify({ phone }),
         });
-      });
-    } catch (err) {
-      statusMsg.textContent = err.message;
-      listEl.innerHTML = '';
-    }
-  };
-
-  document.getElementById('btn-open-admin-mod').addEventListener('click', () => {
-    document.getElementById('admin-mod-modal').classList.add('active');
+        state.pendingWaPhone = res.phone;
+        document.getElementById('input-verify-phone').value = res.phone;
+        document.getElementById('wa-otp-verify-block').classList.remove('hidden');
+        const hintEl = document.getElementById('wa-otp-dev-hint');
+        if (res.simulated && res.devOtpCode) {
+          hintEl.textContent = `Mode simulateur local — Code OTP WhatsApp : ${res.devOtpCode}`;
+          hintEl.classList.remove('hidden');
+        } else {
+          hintEl.textContent = `Code envoyé sur WhatsApp au ${res.phone} (valable 5 min).`;
+          hintEl.classList.remove('hidden');
+        }
+        document.getElementById('input-wa-otp-code').value = '';
+        document.getElementById('input-wa-otp-code').focus();
+        showToast(`Code OTP WhatsApp envoyé vers ${res.phone}.`);
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
   });
-  document.getElementById('btn-close-admin-mod').addEventListener('click', closeAdminModModal);
-  document.getElementById('btn-admin-load-queue').addEventListener('click', loadAdminModerationQueue);
-  document.getElementById('admin-status-filter').addEventListener('change', () => {
-    if (document.getElementById('admin-secret-input').value.trim()) {
-      loadAdminModerationQueue();
-    }
+
+  const confirmWaOtpBtn = document.getElementById('btn-confirm-wa-otp');
+  confirmWaOtpBtn.addEventListener('click', async () => {
+    await withBusyButton(confirmWaOtpBtn, async () => {
+      try {
+        const phone = state.pendingWaPhone || document.getElementById('input-verify-phone').value.trim();
+        const code = document.getElementById('input-wa-otp-code').value.trim();
+        const res = await apiFetch('/auth/phone-otp/verify', {
+          method: 'POST',
+          body: JSON.stringify({ phone, code }),
+        });
+        state.user = res.user;
+        document.getElementById('wa-otp-verify-block').classList.add('hidden');
+        document.getElementById('input-wa-otp-code').value = '';
+        showToast(`Numéro WhatsApp vérifié ! Score de confiance : ${res.trustScore}/100`);
+        loadProfileEditor();
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+  });
+
+  // Account Password Change & Permanent Deletion (ARTCI / GDPR)
+  document.getElementById('change-password-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.currentTarget.querySelector('button[type="submit"]');
+    await withBusyButton(btn, async () => {
+      try {
+        const currentPassword = document.getElementById('pwd-current').value;
+        const newPassword = document.getElementById('pwd-new').value;
+        await apiFetch('/auth/change-password', {
+          method: 'POST',
+          body: JSON.stringify({ currentPassword, newPassword }),
+        });
+        document.getElementById('pwd-current').value = '';
+        document.getElementById('pwd-new').value = '';
+        showToast('Mot de passe mis à jour avec succès !');
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
+  });
+
+  document.getElementById('btn-open-delete-account')?.addEventListener('click', () => {
+    document.getElementById('delete-account-password').value = '';
+    openModal('delete-account-modal');
+  });
+  document.getElementById('btn-close-delete-modal')?.addEventListener('click', () => closeModal('delete-account-modal'));
+  document.getElementById('btn-delete-cancel')?.addEventListener('click', () => closeModal('delete-account-modal'));
+
+  document.getElementById('delete-account-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-delete-confirm');
+    await withBusyButton(btn, async () => {
+      try {
+        const password = document.getElementById('delete-account-password').value;
+        await apiFetch('/auth/me', {
+          method: 'DELETE',
+          body: JSON.stringify({ password }),
+        });
+        closeModal('delete-account-modal');
+        setToken('');
+        state.user = null;
+        if (state.ws) state.ws.close();
+        document.getElementById('app-shell').classList.add('hidden');
+        document.getElementById('auth-gate').classList.add('active');
+        showToast('Compte et données définitivement supprimés.');
+      } catch (err) {
+        showToast(err.message);
+      }
+    });
   });
 
   const bioVoiceBtn = document.getElementById('btn-record-bio-voice');
@@ -2261,7 +2392,11 @@ document.addEventListener('DOMContentLoaded', () => {
       state.activeRecorder = await recordMicrophoneClip();
       bioVoiceBtn.textContent = 'Terminer l’enregistrement';
     } catch {
-      showToast('Micro indisponible — utilisez "Tester avec audio démo".');
+      showToast(
+        state.publicConfig.demoEnabled
+          ? 'Micro indisponible — utilisez "Tester avec audio démo".'
+          : 'Micro indisponible ou bloqué par votre navigateur.'
+      );
     }
   });
 
@@ -2302,7 +2437,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tags,
         vraiBabi: quiz,
       };
-      if (avatarUrlVal) payload.avatarUrl = avatarUrlVal;
+      if (state.publicConfig.demoEnabled && avatarUrlVal) payload.avatarUrl = avatarUrlVal;
 
       const res = await apiFetch('/profiles/me', {
         method: 'PUT',

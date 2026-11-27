@@ -51,9 +51,28 @@ npm start
 
 Ouvrez ensuite `http://localhost:3000` dans votre navigateur.
 
-### Comptes démo pré-configurés
-- **Kouamé (Cocody • Riviera)** : `kouame@akwaba.ci` / `Akwaba225!` (ou bouton **Explorer en tant que Kouamé** en 1 clic)
-- **Aya (Cocody • Riviera)** : `aya@akwaba.ci` / `Akwaba225!` (ou bouton **Explorer en tant qu'Aya** en 1 clic)
+### Comptes démo pré-configurés (en mode `NODE_ENV=development` uniquement)
+- **Kouamé (Cocody • Riviera)** : `kouame@akwaba.ci` / `Akwaba225!` (ou bouton **Explorer en tant que Kouamé**)
+- **Aya (Cocody • Riviera)** : `aya@akwaba.ci` / `Akwaba225!` (ou bouton **Explorer en tant qu'Aya**)
+
+---
+
+## 🌐 Déploiement Production (VPS / Conteneur avec Volume Persistant)
+
+1. Configurez `.env` avec `NODE_ENV=production` :
+   - `JWT_SECRET` (chaîne aléatoire ≥ 32 caractères)
+   - `ADMIN_MODERATION_SECRET` (clé secrète forte pour la console isolée `/admin`)
+   - `APP_BASE_URL` & `CORS_ORIGIN` (ex. `https://akwaba.ci`)
+   - `TRUST_PROXY=1` (derrière Nginx / Cloudflare / Caddy)
+   - `DATA_DIR=/var/lib/akwaba/data` (stocke `akwaba.sqlite`, `uploads/`, `private_verifications/` et `backups/` hors du code)
+   - Clés réelles `GENIUSPAY_*` (`GENIUSPAY_ENV=live`, `GENIUSPAY_LOCAL_SIMULATOR=false`, `GENIUSPAY_WEBHOOK_SECRET`), `WHATSAPP_*` (`WHATSAPP_LOCAL_SIMULATOR=false`), `GEMINI_API_KEY`, et `RESEND_API_KEY` (récupération de mot de passe email).
+2. En `NODE_ENV=production` :
+   - Aucun compte fictif ni robot n'est injecté en base (seuls les lieux *Safe Date* sont initialisés).
+   - La console modération est isolée sur **`/admin`** (protégée par limitation anti-brute-force) et totalement absente de l'application membres.
+3. Planifiez une sauvegarde à chaud SQLite quotidienne (cron) :
+   ```bash
+   npm run backup
+   ```
 
 ---
 
@@ -63,9 +82,4 @@ Ouvrez ensuite `http://localhost:3000` dans votre navigateur.
 npm test
 ```
 
-Couvre (14 suites d'intégration API & WebSocket) :
-- Authentification JWT, orientation inclusive (`everyone`/`nonbinary`) avec filtrage réciproque, inscription 18+ et parrainage
-- Calcul détaillé d'alchimie culturelle *Vrai Babi* (`breakdown`), réactions contextuelles sur swipe, upload photo sécurisé et Passeport Babi
-- Swipes, matchs mutuels, indicateur d'écriture WebSocket temps réel (`typing`), invitations Safe Date interactives & révélation d'admirateurs
-- Sentinelle *Bouclier Babi* anti-brouteurs & vérification Selfie 225
-- Orchestration **GeniusPay** (création checkout, vérification cryptographique Webhook `HMAC-SHA256`, protection anti-replay, idempotence de livraison des Pass & Cauris)
+Couvre les suites API, WebSocket, sécurité et production (`tests/api.test.js` + `tests/production.test.js`).

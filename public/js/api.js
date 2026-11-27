@@ -36,20 +36,98 @@ export async function apiFetch(path, options = {}) {
 }
 
 export function connectRealtimeSocket(onEvent) {
-  const token = getToken();
-  if (!token) return null;
+  let socket = null;
+  let closedByUser = false;
+  let reconnectAttempt = 0;
+  let reconnectTimer = null;
+  let pingTimer = null;
 
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${proto}//${window.location.host}/ws?token=${encodeURIComponent(token)}`);
+  const clearTimers = () => {
+    clearTimeout(reconnectTimer);
+    clearInterval(pingTimer);
+    reconnectTimer = null;
+    pingTimer = null;
+  };
 
-  ws.addEventListener('message', (evt) => {
+  const scheduleReconnect = () => {
+    if (closedByUser || !getToken()) return;
+    const delays = [1000, 2000, 4000, 8000, 15000];
+    const delay = delays[Math.min(reconnectAttempt, delays.length - 1)];
+    reconnectAttempt += 1;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(openConnection, delay);
+  };
+
+  const openConnection = async () => {
+    if (closedByUser || !getToken()) return;
     try {
-      const payload = JSON.parse(evt.data);
-      onEvent(payload);
-    } catch {
-      // Ignore malformed payload
-    }
-  });
+      const res = await apiFetch('/auth/ws-ticket', { method: 'POST' });
+      if (closedByUser || !res?.ticket) return;
 
-  return ws;
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${window.location.host}/ws?ticket=${encodeURIComponent(res.ticket)}`);
+      socket = ws;
+
+      ws.addEventListener('open', () => {
+        reconnectAttempt = 0;
+        clearInterval(pingTimer);
+        pingTimer = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 25_000);
+      });
+
+      ws.addEventListener('message', (evt) => {
+        try {
+          const payload = JSON.parse(evt.data);
+          onEvent(payload);
+        } catch {
+          // Ignore malformed payload
+        }
+      });
+
+      ws.addEventListener('close', (evt) => {
+        clearInterval(pingTimer);
+        if (evt.code === 4004) {
+          closedByUser = true;
+          return;
+        }
+        scheduleReconnect();
+      });
+
+      ws.addEventListener('error', () => {
+        // close listener handles backoff reconnection
+      });
+    } catch {
+      scheduleReconnect();
+    }
+  };
+
+  openConnection();
+
+  return {
+    send(payload) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(typeof payload === 'string' ? payload : JSON.stringify(payload));
+        return true;
+      }
+      return false;
+    },
+    isOpen() {
+      return Boolean(socket && socket.readyState === WebSocket.OPEN);
+    },
+    close() {
+      closedByUser = true;
+      clearTimers();
+      if (socket) {
+        try {
+          socket.close();
+        } catch {
+          // Ignore close errors
+        }
+        socket = null;
+      }
+    },
+  };
 }

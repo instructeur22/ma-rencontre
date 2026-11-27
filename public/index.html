@@ -36,7 +36,7 @@
           <li><strong>Paiements Mobile Money (GeniusPay)</strong> — Wave, Orange Money, MTN MoMo, Moov et Carte bancaire en FCFA.</li>
         </ul>
 
-        <div class="demo-entry-box">
+        <div id="demo-entry-box" class="demo-entry-box hidden">
           <span class="demo-label">Accès instantané pour explorer l'application :</span>
           <div class="demo-btn-row">
             <button id="btn-demo-kouame" class="btn-primary" type="button">
@@ -51,21 +51,24 @@
 
       <div class="auth-panel surface-card">
         <div class="auth-tabs" role="tablist">
-          <button id="tab-login" class="auth-tab active" type="button" data-auth-mode="login">Connexion</button>
-          <button id="tab-register" class="auth-tab" type="button" data-auth-mode="register">Créer un compte (18+)</button>
+          <button id="tab-login" class="auth-tab active" type="button" role="tab" aria-selected="true" aria-controls="login-form" data-auth-mode="login">Connexion</button>
+          <button id="tab-register" class="auth-tab" type="button" role="tab" aria-selected="false" aria-controls="register-form" data-auth-mode="register">Créer un compte (18+)</button>
         </div>
 
         <form id="login-form" class="auth-form">
           <div class="field">
             <label for="login-email">Adresse email</label>
-            <input id="login-email" type="email" value="kouame@akwaba.ci" required />
+            <input id="login-email" type="email" placeholder="vous@exemple.ci" autocomplete="email" required />
           </div>
           <div class="field">
             <label for="login-password">Mot de passe</label>
-            <input id="login-password" type="password" value="Akwaba225!" required />
+            <input id="login-password" type="password" placeholder="Votre mot de passe" autocomplete="current-password" required />
           </div>
           <button type="submit" class="btn-primary btn-full">Se connecter</button>
-          <p class="form-hint">Compte démo pré-rempli : <code>kouame@akwaba.ci</code> / <code>Akwaba225!</code></p>
+          <div class="login-extra-row">
+            <button id="btn-forgot-password" class="btn-text" type="button">Mot de passe oublié ?</button>
+          </div>
+          <p id="login-demo-hint" class="form-hint hidden">Compte démo pré-rempli : <code>kouame@akwaba.ci</code> / <code>Akwaba225!</code></p>
         </form>
 
         <form id="register-form" class="auth-form hidden">
@@ -114,20 +117,33 @@
               </select>
             </div>
           </div>
-          <div class="field">
-            <label for="reg-email">Email</label>
-            <input id="reg-email" type="email" placeholder="vous@exemple.ci" required />
+          <div class="field-row">
+            <div class="field">
+              <label for="reg-email">Email</label>
+              <input id="reg-email" type="email" placeholder="vous@exemple.ci" autocomplete="email" required />
+            </div>
+            <div class="field">
+              <label for="reg-phone">Numéro WhatsApp (+225 / Intl)</label>
+              <input id="reg-phone" type="tel" placeholder="+225 07 08 00 00 00" autocomplete="tel" required />
+            </div>
           </div>
           <div class="field-row">
             <div class="field">
               <label for="reg-password">Mot de passe</label>
-              <input id="reg-password" type="password" minlength="8" placeholder="Min. 8 caractères" required />
+              <input id="reg-password" type="password" minlength="8" placeholder="Min. 8 caractères" autocomplete="new-password" required />
             </div>
             <div class="field">
               <label for="reg-referral">Code parrain (optionnel)</label>
               <input id="reg-referral" type="text" placeholder="Ex: AKW-AYA225" />
             </div>
           </div>
+          <label class="check-line terms-check-line">
+            <input id="reg-terms" type="checkbox" required />
+            <span>
+              J'ai 18 ans ou plus et j'accepte les
+              <button id="btn-open-legal-modal" class="btn-text legal-link-btn" type="button">CGU &amp; Politique de confidentialité (ARTCI / RGPD)</button>.
+            </span>
+          </label>
           <button type="submit" class="btn-primary btn-full">Créer mon compte (+50 Cauris offerts)</button>
         </form>
       </div>
@@ -286,33 +302,88 @@
     </div>
   </div>
 
-  <!-- ADMIN MODERATION MODAL (BOUCLIER BABI) -->
-  <div id="admin-mod-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="admin-mod-title">
-    <div class="modal-sheet surface-card admin-mod-sheet">
+  <!-- FORGOT PASSWORD MODAL (2-STEP WHATSAPP / EMAIL) -->
+  <div id="forgot-password-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="forgot-modal-title">
+    <div class="modal-sheet surface-card">
       <div class="modal-head">
         <div>
-          <p class="eyebrow">Bouclier Babi • Revue humaine privée</p>
-          <h3 id="admin-mod-title">File de modération Selfie 225</h3>
+          <p class="eyebrow">Récupération de compte</p>
+          <h3 id="forgot-modal-title">Mot de passe oublié</h3>
         </div>
-        <button id="btn-close-admin-mod" class="icon-close" type="button" aria-label="Fermer" data-icon="close" data-icon-class="ak-ico-sm"></button>
+        <button id="btn-close-forgot-modal" class="icon-close" type="button" aria-label="Fermer" data-icon="close" data-icon-class="ak-ico-sm"></button>
       </div>
 
-      <div class="admin-auth-bar">
-        <input id="admin-secret-input" type="password" placeholder="Clé X-Admin-Secret" autocomplete="off" />
-        <select id="admin-status-filter" aria-label="Filtrer par statut">
-          <option value="pending_review">En attente</option>
-          <option value="all">Tout voir</option>
-          <option value="verified">Approuvés</option>
-          <option value="rejected">Refusés</option>
-        </select>
-        <button id="btn-admin-load-queue" class="btn-primary" type="button">Charger</button>
+      <form id="forgot-request-form">
+        <div class="field">
+          <label for="forgot-identifier">Email ou numéro WhatsApp</label>
+          <input id="forgot-identifier" type="text" placeholder="vous@exemple.ci ou +2250708000000" required />
+        </div>
+        <div class="modal-actions-row">
+          <button type="button" id="btn-forgot-cancel" class="btn-secondary">Annuler</button>
+          <button type="submit" id="btn-forgot-send" class="btn-primary">Recevoir le code (6 chiffres)</button>
+        </div>
+      </form>
+
+      <form id="forgot-confirm-form" class="hidden" style="margin-top:0.85rem;">
+        <p id="forgot-dev-hint" class="wa-otp-hint hidden"></p>
+        <div class="field">
+          <label for="forgot-code">Code à 6 chiffres</label>
+          <input id="forgot-code" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" required />
+        </div>
+        <div class="field">
+          <label for="forgot-new-password">Nouveau mot de passe (min. 8 caractères)</label>
+          <input id="forgot-new-password" type="password" minlength="8" autocomplete="new-password" required />
+        </div>
+        <div class="modal-actions-row">
+          <button type="submit" id="btn-forgot-confirm" class="btn-primary">Valider le nouveau mot de passe</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- LEGAL & ARTCI / GDPR MODAL -->
+  <div id="legal-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="legal-modal-title">
+    <div class="modal-sheet surface-card" style="max-width:560px;">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow">Transparence &amp; Conformité • ARTCI (CI) &amp; RGPD</p>
+          <h3 id="legal-modal-title">CGU &amp; Politique de confidentialité</h3>
+        </div>
+        <button id="btn-close-legal-modal" class="icon-close" type="button" aria-label="Fermer" data-icon="close" data-icon-class="ak-ico-sm"></button>
       </div>
+      <div class="legal-body">
+        <p><strong>1. Réservé aux adultes (18+) :</strong> L'accès à AKWABA est strictement réservé aux personnes majeures. Tout compte signalé ou soupçonné de fraude est banni sans préavis.</p>
+        <p><strong>2. Données Bouclier Babi :</strong> Votre numéro WhatsApp vérifié sert uniquement à la sécurité et à la récupération de compte. Les selfies de défi sont conservés dans un espace privé non public et ne sont jamais affichés aux autres membres.</p>
+        <p><strong>3. Paiements GeniusPay :</strong> Les transactions FCFA sont traitées via GeniusPay ; AKWABA ne stocke jamais vos codes secrets Mobile Money ni vos numéros de carte.</p>
+        <p><strong>4. Vos droits (Loi ivoirienne n°2013-450 &amp; RGPD) :</strong> Vous pouvez modifier vos informations à tout moment et supprimer définitivement votre compte ainsi que tous vos médias depuis <em>Mon Profil → Sécurité &amp; Vie privée</em>.</p>
+      </div>
+      <div class="modal-actions-row">
+        <button id="btn-legal-accept" type="button" class="btn-primary">Compris</button>
+      </div>
+    </div>
+  </div>
 
-      <p id="admin-mod-status-msg" class="muted-text small" style="margin-bottom:0.75rem;">
-        Saisissez votre clé de modération pour consulter les selfies privés en attente.
-      </p>
-
-      <div id="admin-mod-queue-list" class="admin-mod-list"></div>
+  <!-- DELETE ACCOUNT CONFIRMATION MODAL -->
+  <div id="delete-account-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+    <div class="modal-sheet surface-card">
+      <div class="modal-head">
+        <div>
+          <p class="eyebrow" style="color:#991B1B;">Action irréversible</p>
+          <h3 id="delete-modal-title">Supprimer définitivement mon compte</h3>
+        </div>
+        <button id="btn-close-delete-modal" class="icon-close" type="button" aria-label="Fermer" data-icon="close" data-icon-class="ak-ico-sm"></button>
+      </div>
+      <p class="muted-text small">Toutes vos conversations, matchs, Cauris, photos, notes vocales et selfies privés seront immédiatement effacés de nos serveurs.</p>
+      <form id="delete-account-form" style="margin-top:0.85rem;">
+        <div class="field">
+          <label for="delete-account-password">Confirmez votre mot de passe</label>
+          <input id="delete-account-password" type="password" autocomplete="current-password" required />
+        </div>
+        <div class="modal-actions-row">
+          <button type="button" id="btn-delete-cancel" class="btn-secondary">Annuler</button>
+          <button type="submit" id="btn-delete-confirm" class="btn-danger">Supprimer définitivement</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -632,7 +703,6 @@
             <div class="surface-card panel-pad">
               <div class="panel-title-row" style="margin-bottom:0.45rem;">
                 <h3 class="inline-icon-label"><span data-icon="shieldCheck" data-icon-class="ak-ico-sm"></span> Vérification Selfie 225</h3>
-                <button id="btn-open-admin-mod" class="btn-text" type="button" title="Ouvrir la file de modération Bouclier Babi">Modération</button>
               </div>
               <div id="safety-verif-status" class="verif-status-banner hidden"></div>
               <p id="safety-challenge-label" class="muted-text small"></p>
@@ -682,7 +752,27 @@
                   <span data-icon="mic" data-icon-class="ak-ico-sm"></span>
                   <span>Enregistrer ma voix</span>
                 </button>
-                <button id="btn-demo-bio-voice" class="btn-secondary" type="button">Tester avec audio démo</button>
+                <button id="btn-demo-bio-voice" class="btn-secondary hidden" type="button">Tester avec audio démo</button>
+              </div>
+            </div>
+
+            <!-- Account Security & ARTCI / GDPR Privacy Card -->
+            <div class="surface-card panel-pad">
+              <h3 class="inline-icon-label"><span data-icon="lock" data-icon-class="ak-ico-sm"></span> Sécurité &amp; Vie privée</h3>
+              <form id="change-password-form" class="security-form-stack">
+                <div class="field">
+                  <label for="pwd-current">Mot de passe actuel</label>
+                  <input id="pwd-current" type="password" autocomplete="current-password" required />
+                </div>
+                <div class="field">
+                  <label for="pwd-new">Nouveau mot de passe (min. 8 car.)</label>
+                  <input id="pwd-new" type="password" minlength="8" autocomplete="new-password" required />
+                </div>
+                <button type="submit" class="btn-secondary btn-full">Mettre à jour mon mot de passe</button>
+              </form>
+              <div class="privacy-actions-row">
+                <button id="btn-view-legal-profile" class="btn-text" type="button">CGU &amp; Confidentialité</button>
+                <button id="btn-open-delete-account" class="btn-text danger-text" type="button">Supprimer mon compte</button>
               </div>
             </div>
           </div>
@@ -700,8 +790,8 @@
                 </button>
                 <input id="input-avatar-file" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" />
               </div>
-              <div id="profile-avatar-presets" class="avatar-presets-grid"></div>
-              <div class="field" style="margin-top:0.65rem;margin-bottom:0;">
+              <div id="profile-avatar-presets" class="avatar-presets-grid hidden"></div>
+              <div id="avatar-url-field" class="field hidden" style="margin-top:0.65rem;margin-bottom:0;">
                 <label for="edit-avatar-url">Ou URL d'image (HTTPS / locale)</label>
                 <input id="edit-avatar-url" type="text" placeholder="/assets/profiles/kouame.jpg" />
               </div>

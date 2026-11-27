@@ -43,6 +43,8 @@ const SVG_PATHS = {
     '<circle cx="12" cy="8.5" r="3.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M5 19.5c0-3.3 3.1-5.5 7-5.5s7 2.2 7 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>',
   sun:
     '<circle cx="12" cy="12" r="4" fill="currentColor"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
+  lock:
+    '<rect x="5" y="11" width="14" height="9.5" rx="2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M8 11V7.5a4 4 0 018 0V11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>',
 };
 
 export function iconSvg(name, className = 'ak-ico') {

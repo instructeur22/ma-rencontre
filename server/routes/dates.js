@@ -33,6 +33,15 @@ router.get('/spots', requireAuth, (req, res) => {
 });
 
 router.post('/bookings', requireAuth, async (req, res) => {
+  if (config.nodeEnv === 'production' && config.geniusPay.useLocalSimulator) {
+    return res.status(503).json({
+      success: false,
+      error: {
+        code: 'PAYMENT_UNAVAILABLE',
+        message: 'Les paiements GeniusPay ne sont pas encore configurés sur ce serveur.',
+      },
+    });
+  }
   try {
     const { spotId, bookingDate = 'Ce week-end', guestsCount = 2, paymentMethod = 'wave', customerPhone = '' } = req.body || {};
     const db = getDb();

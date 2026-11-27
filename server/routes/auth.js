@@ -1,12 +1,17 @@
 import express from 'express';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { config } from '../config.js';
-import { getDb } from '../db/database.js';
+import { getDb, normalizeRows, runInTransaction } from '../db/database.js';
 import { requireAuth, signAuthToken } from '../middleware/auth.js';
 import { creditCauris, getEffectiveSubscriptionTier } from '../services/monetizationService.js';
 import { computeTrustScore } from '../services/antiScamService.js';
-import { requestWhatsAppOtp, verifyWhatsAppOtp } from '../services/whatsappOtpService.js';
+import { normalizePhoneE164, requestWhatsAppOtp, verifyWhatsAppOtp } from '../services/whatsappOtpService.js';
+import { confirmPasswordReset, requestPasswordReset } from '../services/passwordResetService.js';
+import { getPrivateVerificationsDir } from '../services/selfieVerificationService.js';
+import { disconnectUserSockets, issueWsTicket } from '../ws/realtime.js';
 import {
   ABIDJAN_COMMUNES,
   AVATAR_PRESETS,
@@ -76,12 +81,44 @@ router.post('/register', (req, res) => {
     intention = 'Relation sérieuse',
     phone = '',
     referralCodeUsed = '',
+    acceptedTerms,
   } = req.body || {};
 
   if (!email || !password || !name || age === undefined || age === null) {
     return res.status(422).json({
       success: false,
       error: { code: 'VALIDATION_ERROR', message: 'Email, mot de passe, prénom et âge sont requis.' },
+    });
+  }
+  if (acceptedTerms === false || (config.nodeEnv === 'production' && acceptedTerms !== true)) {
+    return res.status(422).json({
+      success: false,
+      error: {
+        code: 'TERMS_REQUIRED',
+        message: 'Vous devez accepter les CGU, la politique de confidentialité et certifier avoir 18 ans ou plus.',
+      },
+    });
+  }
+
+  let normalizedPhone = '';
+  if (phone && String(phone).trim()) {
+    normalizedPhone = normalizePhoneE164(phone);
+    if (!normalizedPhone) {
+      return res.status(422).json({
+        success: false,
+        error: {
+          code: 'INVALID_PHONE',
+          message: 'Numéro WhatsApp invalide (format attendu : +2250700000000 ou 0700000000).',
+        },
+      });
+    }
+  } else if (config.nodeEnv === 'production') {
+    return res.status(422).json({
+      success: false,
+      error: {
+        code: 'PHONE_REQUIRED',
+        message: 'Un numéro WhatsApp valide est requis pour sécuriser votre compte.',
+      },
     });
   }
   const cleanEmail = String(email).trim().toLowerCase();
@@ -130,16 +167,18 @@ router.post('/register', (req, res) => {
   const isDiaspora = DIASPORA_HUBS.includes(commune) || DIASPORA_HUBS.includes(city) ? 1 : 0;
   const avatarUrl = safeGender === 'woman' ? '/assets/profiles/aya.jpg' : '/assets/profiles/kouame.jpg';
 
+  const termsAcceptedAt = acceptedTerms === true ? new Date().toISOString() : '';
+
   db.prepare(
     `INSERT INTO users (
       id, email, phone, password_hash, name, age, gender, looking_for,
       commune, city, country_code, is_diaspora, intention, bio, avatar_url,
-      cauris_balance, referral_code, trust_score
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 50)`
+      cauris_balance, referral_code, trust_score, terms_accepted_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 50, ?)`
   ).run(
     id,
     cleanEmail,
-    String(phone).trim().slice(0, 24),
+    normalizedPhone,
     passwordHash,
     cleanName,
     numericAge,
@@ -152,7 +191,8 @@ router.post('/register', (req, res) => {
     String(intention).slice(0, 80),
     `Nouveau membre sur AKWABA à ${String(commune).slice(0, 80)}.`,
     avatarUrl,
-    cleanCode
+    cleanCode,
+    termsAcceptedAt
   );
 
   creditCauris(db, id, 50, 'Bonus de bienvenue AKWABA', 'WELCOME-50');
@@ -314,6 +354,155 @@ router.post('/phone-verify', requireAuth, (req, res) => {
       user: formatSelfUser(updated),
     },
   });
+});
+
+function resolveDiskPathFromUploadUrl(uploadUrl) {
+  if (!uploadUrl || typeof uploadUrl !== 'string' || !uploadUrl.startsWith('/uploads/') || uploadUrl.includes('..')) {
+    return null;
+  }
+  const rel = uploadUrl.replace(/^\/uploads\//, '');
+  const base = path.resolve(config.uploadsDir);
+  const candidate = path.resolve(base, rel);
+  if (!candidate.startsWith(base + path.sep)) return null;
+  return candidate;
+}
+
+/**
+ * Permanently delete a user account and all associated files on disk (ARTCI / GDPR / moderation ban).
+ */
+export function purgeUserAccount(db, userId) {
+  const user = db.prepare('SELECT id, avatar_url, voice_note_url FROM users WHERE id = ?').get(userId);
+  if (!user) return { deleted: false };
+
+  const filesToDelete = [];
+  for (const mediaUrl of [user.avatar_url, user.voice_note_url]) {
+    const p = resolveDiskPathFromUploadUrl(mediaUrl);
+    if (p) filesToDelete.push(p);
+  }
+
+  const sentVoices = normalizeRows(
+    db.prepare("SELECT media_url FROM messages WHERE sender_id = ? AND media_url LIKE '/uploads/%'").all(userId)
+  );
+  for (const row of sentVoices) {
+    const p = resolveDiskPathFromUploadUrl(row.media_url);
+    if (p) filesToDelete.push(p);
+  }
+
+  const verifs = normalizeRows(
+    db.prepare('SELECT image_path FROM safety_verifications WHERE user_id = ?').all(userId)
+  );
+  const privBase = path.resolve(getPrivateVerificationsDir());
+  for (const row of verifs) {
+    if (row.image_path) {
+      const p = path.resolve(privBase, path.basename(row.image_path));
+      if (p.startsWith(privBase + path.sep)) filesToDelete.push(p);
+    }
+  }
+
+  runInTransaction(db, () => {
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+  });
+
+  disconnectUserSockets(userId);
+
+  let removedFiles = 0;
+  for (const filePath of new Set(filesToDelete)) {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        removedFiles += 1;
+      }
+    } catch {
+      // Ignore ENOENT / unlink error
+    }
+  }
+
+  return { deleted: true, removedFiles };
+}
+
+router.post('/ws-ticket', requireAuth, (req, res) => {
+  return res.json({
+    success: true,
+    data: issueWsTicket(req.user.id),
+  });
+});
+
+router.post('/password-reset/request', async (req, res) => {
+  try {
+    const { identifier } = req.body || {};
+    const db = getDb();
+    const result = await requestPasswordReset(db, identifier);
+    if (!result.ok) {
+      return res.status(result.status).json({
+        success: false,
+        error: {
+          code: result.code,
+          message: result.message,
+          ...(result.retryAfterSec ? { retryAfterSec: result.retryAfterSec } : {}),
+        },
+      });
+    }
+    return res.json({ success: true, data: result.data });
+  } catch (err) {
+    return res.status(502).json({
+      success: false,
+      error: { code: 'RESET_DELIVERY_FAILED', message: err.message },
+    });
+  }
+});
+
+router.post('/password-reset/confirm', (req, res) => {
+  const { identifier, code, newPassword } = req.body || {};
+  const db = getDb();
+  const result = confirmPasswordReset(db, { identifier, code, newPassword });
+  if (!result.ok) {
+    return res.status(result.status).json({
+      success: false,
+      error: { code: result.code, message: result.message },
+    });
+  }
+  return res.json({ success: true, data: result.data });
+});
+
+router.post('/change-password', requireAuth, (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword || String(newPassword).length < 8) {
+    return res.status(422).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Mot de passe actuel et nouveau mot de passe (>= 8 caractères) requis.' },
+    });
+  }
+  const db = getDb();
+  const user = db.prepare('SELECT id, password_hash FROM users WHERE id = ?').get(req.user.id);
+  if (!user || !bcrypt.compareSync(String(currentPassword), user.password_hash)) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'INVALID_PASSWORD', message: 'Mot de passe actuel incorrect.' },
+    });
+  }
+  const nextHash = bcrypt.hashSync(String(newPassword), 10);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(nextHash, req.user.id);
+  return res.json({ success: true, data: { updated: true, message: 'Mot de passe modifié.' } });
+});
+
+router.delete('/me', requireAuth, (req, res) => {
+  const { password } = req.body || {};
+  if (!password) {
+    return res.status(422).json({
+      success: false,
+      error: { code: 'PASSWORD_REQUIRED', message: 'Confirmez votre mot de passe pour supprimer votre compte.' },
+    });
+  }
+  const db = getDb();
+  const user = db.prepare('SELECT id, password_hash FROM users WHERE id = ?').get(req.user.id);
+  if (!user || !bcrypt.compareSync(String(password), user.password_hash)) {
+    return res.status(401).json({
+      success: false,
+      error: { code: 'INVALID_PASSWORD', message: 'Mot de passe incorrect.' },
+    });
+  }
+  const result = purgeUserAccount(db, req.user.id);
+  return res.json({ success: true, data: result });
 });
 
 export default router;

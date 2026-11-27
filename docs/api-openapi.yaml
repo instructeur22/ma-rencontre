@@ -19,6 +19,12 @@ components:
       in: header
       name: X-Admin-Secret
 paths:
+  /public-config:
+    get:
+      summary: Capacités publiques du serveur (mode démo, simulateur paiement, canaux OTP/Email actifs)
+      responses:
+        '200':
+          description: Configuration publique sûre
   /health:
     get:
       summary: Vérifier l'état de l'API, GeniusPay, WhatsApp OTP et Gemini Vision
@@ -43,6 +49,36 @@ paths:
       responses:
         '200':
           description: JWT démo retourné
+  /auth/ws-ticket:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Générer un ticket WebSocket éphémère à usage unique (30s) pour éviter le JWT dans l'URL
+      responses:
+        '200':
+          description: Ticket WebSocket retourné
+  /auth/password-reset/request:
+    post:
+      summary: Demander un code à 6 chiffres pour réinitialiser son mot de passe (WhatsApp prioritaire ou Email)
+      responses:
+        '200':
+          description: Demande traitée
+        '429':
+          description: Cooldown actif
+  /auth/password-reset/confirm:
+    post:
+      summary: Valider le code à 6 chiffres et définir un nouveau mot de passe
+      responses:
+        '200':
+          description: Mot de passe mis à jour
+  /auth/change-password:
+    post:
+      security:
+        - BearerAuth: []
+      summary: Changer son mot de passe depuis Mon Profil
+      responses:
+        '200':
+          description: Mot de passe modifié
   /auth/me:
     get:
       security:
@@ -51,6 +87,13 @@ paths:
       responses:
         '200':
           description: Session courante
+    delete:
+      security:
+        - BearerAuth: []
+      summary: Supprimer définitivement son compte et purger ses fichiers sur disque (ARTCI / RGPD)
+      responses:
+        '200':
+          description: Compte et médias supprimés
   /auth/phone-otp/request:
     post:
       security:
@@ -374,6 +417,28 @@ paths:
       responses:
         '200':
           description: Décision enregistrée et score de confiance recalculé
+  /safety/admin/reports:
+    get:
+      security:
+        - AdminSecret: []
+      summary: Lister les signalements membres dans la console /admin
+      responses:
+        '200':
+          description: Liste des signalements
+  /safety/admin/users/{id}:
+    delete:
+      security:
+        - AdminSecret: []
+      summary: Bannir et purger définitivement un compte frauduleux et ses fichiers
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Compte purgé
   /safety/report:
     post:
       security:

@@ -39,8 +39,15 @@ function detectImageExtension(buffer, declaredMime = '') {
 function isSafeAvatarUrl(url) {
   if (typeof url !== 'string') return false;
   const trimmed = url.trim();
+  if (trimmed.includes('..')) return false;
+  if (trimmed.startsWith('/assets/profiles/') || trimmed.startsWith('/uploads/avatars/')) {
+    return /^\/(assets\/profiles|uploads\/avatars)\/[a-zA-Z0-9._-]+$/.test(trimmed);
+  }
+  if (config.nodeEnv === 'production') {
+    return false;
+  }
   if (trimmed.startsWith('/assets/') || trimmed.startsWith('/uploads/')) {
-    return !trimmed.includes('..');
+    return true;
   }
   return /^https?:\/\/[^\s"'<>]+$/i.test(trimmed);
 }
@@ -234,7 +241,7 @@ router.post('/me/voice', requireAuth, (req, res) => {
 
   const ext = mimeType.includes('wav') ? 'wav' : mimeType.includes('mp4') || mimeType.includes('m4a') ? 'm4a' : 'webm';
   const filename = `${req.user.id}_${Date.now()}_${crypto.randomInt(100, 999)}.${ext}`;
-  const uploadDir = path.join(config.rootDir, 'public/uploads/voices');
+  const uploadDir = path.join(config.uploadsDir, 'voices');
   fs.mkdirSync(uploadDir, { recursive: true });
   fs.writeFileSync(path.join(uploadDir, filename), decoded);
 
@@ -299,7 +306,7 @@ router.post('/me/avatar', requireAuth, (req, res) => {
   }
 
   const filename = `${req.user.id}_${Date.now()}_${crypto.randomInt(100, 999)}.${ext}`;
-  const uploadDir = path.join(config.rootDir, 'public/uploads/avatars');
+  const uploadDir = path.join(config.uploadsDir, 'avatars');
   fs.mkdirSync(uploadDir, { recursive: true });
   fs.writeFileSync(path.join(uploadDir, filename), decoded);
 

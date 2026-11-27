@@ -8,6 +8,7 @@
     "start": "node --no-warnings server/index.js",
     "dev": "node --no-warnings --watch server/index.js",
     "seed": "node --no-warnings server/db/seed.js",
+    "backup": "node --no-warnings scripts/backup-db.js",
     "test": "node --no-warnings --test tests/*.test.js"
   },
   "keywords": [

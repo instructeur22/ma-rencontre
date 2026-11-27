@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import { config } from '../config.js';
 import { getDb } from './database.js';
@@ -64,13 +65,87 @@ export function ensureDemoAudioAssets() {
   }
 }
 
-export function seedDatabase(dbParam = null) {
+export function seedPartnerSpots(dbParam = null) {
   const db = dbParam || getDb();
+  const existingSpots = db.prepare('SELECT COUNT(*) as cnt FROM safe_date_spots').get();
+  if (existingSpots && Number(existingSpots.cnt) > 0) {
+    return { spotsSeeded: false };
+  }
+
+  // Safe Date partner spots in Abidjan & Assinie
+  const spots = [
+    {
+      id: 'spot_cocody_bistro',
+      name: 'Kawa & Coco • Bistro Jardin',
+      commune: 'Cocody • Ambassades',
+      category: 'Café Chic & Brunch',
+      vibe: 'Intime, lumineux et idéal pour une première conversation vraie',
+      budget_xof: '6 000 – 14 000 FCFA / pers.',
+      ticket_price_xof: 5000,
+      image_url: '/assets/venues/cocody-bistro.jpg',
+      perk_akwaba: '2 jus de bissap ou cafés ivoiriens offerts sur présentation du Pass AKWABA',
+      next_event_title: 'Brunch Rencontres Célibataires Vérifiés 225',
+      next_event_date: 'Dimanche • 11h30',
+    },
+    {
+      id: 'spot_zone4_rooftop',
+      name: 'La Lagune Sky Lounge',
+      commune: 'Marcory • Zone 4',
+      category: 'Rooftop Sunset',
+      vibe: 'Vue panoramique sur la lagune Ébrié, musique afro-soul feutrée',
+      budget_xof: '10 000 – 22 000 FCFA / pers.',
+      ticket_price_xof: 8000,
+      image_url: '/assets/venues/zone4-rooftop.jpg',
+      perk_akwaba: 'Table réservée côté vue + accueil prioritaire Safe Date',
+      next_event_title: 'Afterwork Diaspora & Abidjan Connect',
+      next_event_date: 'Vendredi • 19h30',
+    },
+    {
+      id: 'spot_assinie_sunset',
+      name: 'Les Lanternes d’Assinie',
+      commune: 'Assinie • Km 14',
+      category: 'Évasion Lagune',
+      vibe: 'Ponton en bois sur l’eau calme, lanternes dorées et brise marine',
+      budget_xof: '15 000 – 30 000 FCFA / pers.',
+      ticket_price_xof: 12000,
+      image_url: '/assets/venues/assinie-sunset.jpg',
+      perk_akwaba: 'Pass journée coucher de soleil + cocktail d’accueil',
+      next_event_title: 'Sunset Acoustic & Rencontres Assinie',
+      next_event_date: 'Samedi • 17h00',
+    },
+  ];
+
+  const insertSpot = db.prepare(`
+    INSERT INTO safe_date_spots (
+      id, name, commune, category, vibe, budget_xof, ticket_price_xof,
+      image_url, perk_akwaba, next_event_title, next_event_date
+    ) VALUES (
+      @id, @name, @commune, @category, @vibe, @budget_xof, @ticket_price_xof,
+      @image_url, @perk_akwaba, @next_event_title, @next_event_date
+    )
+  `);
+
+  for (const s of spots) {
+    insertSpot.run(s);
+  }
+  return { spotsSeeded: true, spotsCount: spots.length };
+}
+
+export function seedDatabase(dbParam = null, options = {}) {
+  const db = dbParam || getDb();
+  const includeDemoUsers =
+    options.includeDemoUsers !== undefined ? Boolean(options.includeDemoUsers) : Boolean(config.allowDemoLogin);
+
+  const spotsRes = seedPartnerSpots(db);
+  if (!includeDemoUsers) {
+    return { seeded: false, ...spotsRes, usersCount: 0, demoSkipped: true };
+  }
+
   ensureDemoAudioAssets();
 
   const existing = db.prepare('SELECT COUNT(*) as cnt FROM users').get();
   if (existing && Number(existing.cnt) > 0) {
-    return { seeded: false };
+    return { seeded: false, ...spotsRes };
   }
 
   const demoPasswordHash = bcrypt.hashSync('Akwaba225!', 10);
@@ -599,68 +674,12 @@ export function seedDatabase(dbParam = null) {
      VALUES (?, ?, 'credit', ?, ?, ?)`
   ).run('tx_seed_welcome', 'usr_kouame', 350, 'Bonus de bienvenue AKWABA + Profil Vérifié 225', 'WELCOME-225');
 
-  // Safe Date partner spots in Abidjan & Assinie
-  const spots = [
-    {
-      id: 'spot_cocody_bistro',
-      name: 'Kawa & Coco • Bistro Jardin',
-      commune: 'Cocody • Ambassades',
-      category: 'Café Chic & Brunch',
-      vibe: 'Intime, lumineux et idéal pour une première conversation vraie',
-      budget_xof: '6 000 – 14 000 FCFA / pers.',
-      ticket_price_xof: 5000,
-      image_url: '/assets/venues/cocody-bistro.jpg',
-      perk_akwaba: '2 jus de bissap ou cafés ivoiriens offerts sur présentation du Pass AKWABA',
-      next_event_title: 'Brunch Rencontres Célibataires Vérifiés 225',
-      next_event_date: 'Dimanche • 11h30',
-    },
-    {
-      id: 'spot_zone4_rooftop',
-      name: 'La Lagune Sky Lounge',
-      commune: 'Marcory • Zone 4',
-      category: 'Rooftop Sunset',
-      vibe: 'Vue panoramique sur la lagune Ébrié, musique afro-soul feutrée',
-      budget_xof: '10 000 – 22 000 FCFA / pers.',
-      ticket_price_xof: 8000,
-      image_url: '/assets/venues/zone4-rooftop.jpg',
-      perk_akwaba: 'Table réservée côté vue + accueil prioritaire Safe Date',
-      next_event_title: 'Afterwork Diaspora & Abidjan Connect',
-      next_event_date: 'Vendredi • 19h30',
-    },
-    {
-      id: 'spot_assinie_sunset',
-      name: 'Les Lanternes d’Assinie',
-      commune: 'Assinie • Km 14',
-      category: 'Évasion Lagune',
-      vibe: 'Ponton en bois sur l’eau calme, lanternes dorées et brise marine',
-      budget_xof: '15 000 – 30 000 FCFA / pers.',
-      ticket_price_xof: 12000,
-      image_url: '/assets/venues/assinie-sunset.jpg',
-      perk_akwaba: 'Pass journée coucher de soleil + cocktail d’accueil',
-      next_event_title: 'Sunset Acoustic & Rencontres Assinie',
-      next_event_date: 'Samedi • 17h00',
-    },
-  ];
-
-  const insertSpot = db.prepare(`
-    INSERT INTO safe_date_spots (
-      id, name, commune, category, vibe, budget_xof, ticket_price_xof,
-      image_url, perk_akwaba, next_event_title, next_event_date
-    ) VALUES (
-      @id, @name, @commune, @category, @vibe, @budget_xof, @ticket_price_xof,
-      @image_url, @perk_akwaba, @next_event_title, @next_event_date
-    )
-  `);
-
-  for (const s of spots) {
-    insertSpot.run(s);
-  }
-
   return { seeded: true, usersCount: users.length };
 }
 
 // Allow running directly via `npm run seed`
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isDirectSeed = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectSeed) {
   const res = seedDatabase();
   console.log('AKWABA seed result:', res);
 }

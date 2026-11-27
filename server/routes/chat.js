@@ -236,7 +236,7 @@ router.post('/:matchId/voice', requireAuth, (req, res) => {
 
   const ext = mimeType.includes('wav') ? 'wav' : mimeType.includes('mp4') ? 'm4a' : 'webm';
   const filename = `chat_${ctx.match.id}_${Date.now()}_${crypto.randomInt(100, 999)}.${ext}`;
-  const dir = path.join(config.rootDir, 'public/uploads/voices');
+  const dir = path.join(config.uploadsDir, 'voices');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, filename), decoded);
 

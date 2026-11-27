@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS users (
   online_status INTEGER DEFAULT 1,
   is_demo_bot INTEGER DEFAULT 0,
   last_active_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  terms_accepted_at TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS swipes (
@@ -118,6 +119,21 @@ CREATE TABLE IF NOT EXISTS phone_otp_challenges (
   max_attempts INTEGER DEFAULT 5,
   expires_at TEXT NOT NULL,
   verified_at TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS password_reset_challenges (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  identifier TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  attempts INTEGER DEFAULT 0,
+  max_attempts INTEGER DEFAULT 5,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
@@ -202,4 +218,5 @@ CREATE INDEX IF NOT EXISTS idx_messages_match ON messages(match_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_ref ON payment_orders(reference);
 CREATE INDEX IF NOT EXISTS idx_phone_otp_user ON phone_otp_challenges(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_pwd_reset_user ON password_reset_challenges(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_safety_verif_status ON safety_verifications(status, created_at);

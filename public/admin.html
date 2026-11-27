@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AKWABA — Console Modération Bouclier Babi</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-left">
+        <a href="/" class="brand-btn" style="text-decoration:none;">
+          <span class="brand-emblem" data-icon="shieldCheck" data-icon-class="ak-ico" aria-hidden="true"></span>
+          <span class="brand-wordmark">AKWABA Modération</span>
+        </a>
+        <span class="location-tag">Console isolée Bouclier Babi</span>
+      </div>
+      <div class="topbar-right">
+        <button id="btn-admin-lock" class="btn-secondary hidden" type="button">Verrouiller</button>
+        <a href="/" class="btn-text" style="text-decoration:none;">Retour à AKWABA</a>
+      </div>
+    </header>
+
+    <main class="workspace" style="max-width:1060px;">
+      <section class="surface-card panel-pad" style="margin-bottom:1.25rem;">
+        <div class="panel-title-row" style="margin-bottom:0.5rem;">
+          <div>
+            <p class="eyebrow">Accès Modérateur • Protégé contre la force brute</p>
+            <h1 class="editorial-h2">Revue Selfie 225 &amp; Signalements</h1>
+          </div>
+        </div>
+
+        <form id="admin-unlock-form" class="admin-auth-bar">
+          <input id="admin-secret-input" type="password" placeholder="Clé secrète modérateur (X-Admin-Secret)" autocomplete="off" required />
+          <select id="admin-status-filter" aria-label="Filtrer les vérifications">
+            <option value="pending_review">En attente</option>
+            <option value="all">Tout voir</option>
+            <option value="verified">Approuvés</option>
+            <option value="rejected">Refusés</option>
+          </select>
+          <button id="btn-admin-load-queue" class="btn-primary" type="submit">Déverrouiller / Charger</button>
+        </form>
+        <p id="admin-mod-status-msg" class="muted-text small" style="margin:0;">
+          Saisissez votre clé de modération pour charger les selfies privés et les signalements membres.
+        </p>
+      </section>
+
+      <div id="admin-workspace" class="hidden">
+        <div class="segmented-control" role="tablist" style="margin-bottom:1rem;">
+          <button id="tab-admin-selfies" class="seg-btn active" role="tab" aria-selected="true" type="button">
+            File Selfie 225 (<span id="admin-selfies-count">0</span>)
+          </button>
+          <button id="tab-admin-reports" class="seg-btn" role="tab" aria-selected="false" type="button">
+            Signalements (<span id="admin-reports-count">0</span>)
+          </button>
+        </div>
+
+        <div id="admin-mod-queue-list" class="admin-mod-list"></div>
+        <div id="admin-reports-list" class="admin-mod-list hidden"></div>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+  <script type="module" src="/js/admin.js"></script>
+</body>
+</html>

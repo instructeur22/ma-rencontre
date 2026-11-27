@@ -99,6 +99,18 @@ export async function sendWhatsAppOtpMessage({ phoneE164, code }) {
 }
 
 export async function requestWhatsAppOtp(db, userId, rawPhone) {
+  if (
+    config.nodeEnv === 'production' &&
+    (config.whatsapp.useLocalSimulator || !config.whatsapp.accessToken || !config.whatsapp.phoneNumberId)
+  ) {
+    return {
+      ok: false,
+      status: 503,
+      code: 'WHATSAPP_UNAVAILABLE',
+      message: 'Le service WhatsApp OTP n’est pas encore configuré sur ce serveur.',
+    };
+  }
+
   const phoneE164 = normalizePhoneE164(rawPhone);
   if (!phoneE164) {
     return {
