@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: akwaba-api
+    runtime: node
+    region: frankfurt
+    plan: free
+    branch: main
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_MODERATION_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: SEED_DEMO_PROFILES
+        value: "true"
+      - key: ALLOW_DEMO_LOGIN
+        value: "true"
+      - key: ALLOW_SANDBOX_SIMULATORS
+        value: "true"
+      - key: GENIUSPAY_ENV
+        value: sandbox
+      - key: GENIUSPAY_BASE_URL
+        value: https://pay.genius.ci/api/v1/merchant
+      - key: GENIUSPAY_LOCAL_SIMULATOR
+        value: "false"
+      - key: GENIUSPAY_PUBLIC_KEY
+        sync: false
+      - key: GENIUSPAY_SECRET_KEY
+        sync: false
+      - key: GENIUSPAY_WEBHOOK_SECRET
+        sync: false
+      - key: WHATSAPP_LOCAL_SIMULATOR
+        value: "true"

@@ -13,12 +13,19 @@ export function createHotBackup(
   backupDir = path.join(config.dataDir, 'backups'),
   keepCount = Number(process.env.BACKUP_KEEP_COUNT || 14)
 ) {
+  if (db.isPostgres) {
+    return {
+      skipped: true,
+      reason: 'PostgreSQL Neon gère ses propres sauvegardes PITR.',
+    };
+  }
   fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const backupPath = path.join(backupDir, `akwaba-${stamp}.sqlite`);
   const escaped = backupPath.replace(/'/g, "''");
 
-  db.exec(`VACUUM INTO '${escaped}';`);
+  const sqliteHandle = db.raw || db;
+  sqliteHandle.exec(`VACUUM INTO '${escaped}';`);
 
   const checkDb = new DatabaseSync(backupPath, { readOnly: true });
   let integrity = 'error';

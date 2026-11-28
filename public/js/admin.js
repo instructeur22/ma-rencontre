@@ -261,6 +261,24 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('tab-admin-selfies').addEventListener('click', () => switchAdminTab('selfies'));
   document.getElementById('tab-admin-reports').addEventListener('click', () => switchAdminTab('reports'));
 
+  document.getElementById('btn-admin-purge-demo').addEventListener('click', async () => {
+    const confirmed = window.confirm(
+      'Purger tous les profils démo (@akwaba.ci), leurs matchs, messages, vocaux et réservations ? Les lieux Safe Date et les comptes membres réels seront conservés.'
+    );
+    if (!confirmed) return;
+    const purgeBtn = document.getElementById('btn-admin-purge-demo');
+    purgeBtn.disabled = true;
+    try {
+      const res = await adminFetch('/safety/admin/purge-demo', { method: 'POST' });
+      showToast(`Purge effectuée : ${res.purgedUsers} compte(s) démo supprimé(s).`);
+      await loadModerationData();
+    } catch (err) {
+      showToast(err.message);
+    } finally {
+      purgeBtn.disabled = false;
+    }
+  });
+
   document.getElementById('btn-admin-lock').addEventListener('click', () => {
     adminState.secret = '';
     sessionStorage.removeItem(ADMIN_SECRET_KEY);

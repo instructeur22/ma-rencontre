@@ -100,7 +100,7 @@ export async function sendWhatsAppOtpMessage({ phoneE164, code }) {
 
 export async function requestWhatsAppOtp(db, userId, rawPhone) {
   if (
-    config.nodeEnv === 'production' &&
+    !config.allowSandboxSimulators &&
     (config.whatsapp.useLocalSimulator || !config.whatsapp.accessToken || !config.whatsapp.phoneNumberId)
   ) {
     return {
@@ -121,13 +121,13 @@ export async function requestWhatsAppOtp(db, userId, rawPhone) {
     };
   }
 
-  const latest = db
-    .prepare(
-      `SELECT id, created_at, verified_at FROM phone_otp_challenges
-       WHERE user_id = ? AND phone_e164 = ? AND verified_at IS NULL
-       ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(userId, phoneE164);
+  const latest = await db.get(
+    `SELECT id, created_at, verified_at FROM phone_otp_challenges
+     WHERE user_id = ? AND phone_e164 = ? AND verified_at IS NULL
+     ORDER BY created_at DESC LIMIT 1`,
+    userId,
+    phoneE164
+  );
 
   if (latest?.created_at) {
     const createdMs = Date.parse(latest.created_at);
@@ -154,11 +154,18 @@ export async function requestWhatsAppOtp(db, userId, rawPhone) {
 
   const delivery = await sendWhatsAppOtpMessage({ phoneE164, code });
 
-  db.prepare(
+  await db.run(
     `INSERT INTO phone_otp_challenges (
       id, user_id, phone_e164, code_hash, salt, channel, attempts, max_attempts, expires_at, created_at
-    ) VALUES (?, ?, ?, ?, ?, 'whatsapp', 0, 5, ?, ?)`
-  ).run(challengeId, userId, phoneE164, codeHash, salt, expiresIso, nowIso);
+    ) VALUES (?, ?, ?, ?, ?, 'whatsapp', 0, 5, ?, ?)`,
+    challengeId,
+    userId,
+    phoneE164,
+    codeHash,
+    salt,
+    expiresIso,
+    nowIso
+  );
 
   const responseData = {
     challengeId,
@@ -172,14 +179,14 @@ export async function requestWhatsAppOtp(db, userId, rawPhone) {
       : `Code de vérification envoyé sur WhatsApp au ${phoneE164}.`,
   };
 
-  if (delivery.simulated && config.nodeEnv !== 'production') {
+  if (delivery.simulated && config.allowSandboxSimulators) {
     responseData.devOtpCode = code;
   }
 
   return { ok: true, status: 200, data: responseData };
 }
 
-export function verifyWhatsAppOtp(db, userId, rawPhone, rawCode) {
+export async function verifyWhatsAppOtp(db, userId, rawPhone, rawCode) {
   const phoneE164 = normalizePhoneE164(rawPhone);
   if (!phoneE164) {
     return {
@@ -200,13 +207,13 @@ export function verifyWhatsAppOtp(db, userId, rawPhone, rawCode) {
     };
   }
 
-  const challenge = db
-    .prepare(
-      `SELECT * FROM phone_otp_challenges
-       WHERE user_id = ? AND phone_e164 = ? AND verified_at IS NULL
-       ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(userId, phoneE164);
+  const challenge = await db.get(
+    `SELECT * FROM phone_otp_challenges
+     WHERE user_id = ? AND phone_e164 = ? AND verified_at IS NULL
+     ORDER BY created_at DESC LIMIT 1`,
+    userId,
+    phoneE164
+  );
 
   if (!challenge) {
     return {
@@ -236,7 +243,7 @@ export function verifyWhatsAppOtp(db, userId, rawPhone, rawCode) {
   }
 
   const nextAttempts = Number(challenge.attempts) + 1;
-  db.prepare('UPDATE phone_otp_challenges SET attempts = ? WHERE id = ?').run(nextAttempts, challenge.id);
+  await db.run('UPDATE phone_otp_challenges SET attempts = ? WHERE id = ?', nextAttempts, challenge.id);
 
   const expectedHash = hashOtpCode(cleanCode, challenge.salt);
   if (!timingSafeHexEqual(expectedHash, challenge.code_hash)) {
@@ -251,9 +258,9 @@ export function verifyWhatsAppOtp(db, userId, rawPhone, rawCode) {
   }
 
   const nowIso = new Date().toISOString();
-  db.prepare('UPDATE phone_otp_challenges SET verified_at = ? WHERE id = ?').run(nowIso, challenge.id);
-  db.prepare('UPDATE users SET phone = ?, phone_verified = 1 WHERE id = ?').run(phoneE164, userId);
-  const trustScore = computeTrustScore(db, userId);
+  await db.run('UPDATE phone_otp_challenges SET verified_at = ? WHERE id = ?', nowIso, challenge.id);
+  await db.run('UPDATE users SET phone = ?, phone_verified = 1 WHERE id = ?', phoneE164, userId);
+  const trustScore = await computeTrustScore(db, userId);
 
   return {
     ok: true,

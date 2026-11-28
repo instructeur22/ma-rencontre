@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { getDb, normalizeRows } from '../db/database.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requireAuth } from '../middleware/auth.js';
 import {
   createGeniusPayPayment,
@@ -28,14 +29,14 @@ router.get('/store/catalog', (req, res) => {
   });
 });
 
-router.get('/wallet', requireAuth, (req, res) => {
+router.get('/wallet', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  const user = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
   const transactions = normalizeRows(
-    db.prepare('SELECT * FROM wallet_transactions WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 30').all(user.id)
+    await db.all('SELECT * FROM wallet_transactions WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 30', user.id)
   );
   const orders = normalizeRows(
-    db.prepare('SELECT * FROM payment_orders WHERE user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 20').all(user.id)
+    await db.all('SELECT * FROM payment_orders WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 20', user.id)
   );
 
   return res.json({
@@ -46,16 +47,16 @@ router.get('/wallet', requireAuth, (req, res) => {
       orders,
     },
   });
-});
+}));
 
-router.post('/wallet/daily-checkin', requireAuth, (req, res) => {
+router.post('/wallet/daily-checkin', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
-  const result = claimDailyCheckin(db, req.user.id);
+  const result = await claimDailyCheckin(db, req.user.id);
   return res.status(result.ok ? 200 : 400).json({
     success: result.ok,
     data: result,
   });
-});
+}));
 
 router.post('/payments/checkout', requireAuth, async (req, res) => {
   const { itemCode, paymentMethod = null, customerPhone = '', provider = 'geniuspay' } = req.body || {};
@@ -77,7 +78,7 @@ router.post('/payments/checkout', requireAuth, async (req, res) => {
     });
   }
 
-  if (config.nodeEnv === 'production' && config.geniusPay.useLocalSimulator) {
+  if (!config.allowSandboxSimulators && config.geniusPay.useLocalSimulator) {
     return res.status(503).json({
       success: false,
       error: {
@@ -114,13 +115,12 @@ router.post('/payments/checkout', requireAuth, async (req, res) => {
       metadata,
     });
 
-    db.prepare(
+    await db.run(
       `INSERT INTO payment_orders (
         id, reference, user_id, provider, payment_method, item_code, item_type,
         amount_xof, fees_xof, net_amount_xof, currency, status, checkout_url,
         customer_phone, metadata_json, environment
-      ) VALUES (?, ?, ?, 'geniuspay', ?, ?, ?, ?, ?, ?, 'XOF', 'pending', ?, ?, ?, ?)`
-    ).run(
+      ) VALUES (?, ?, ?, 'geniuspay', ?, ?, ?, ?, ?, ?, 'XOF', 'pending', ?, ?, ?, ?)`,
       orderId,
       gpResponse.reference,
       req.user.id,
@@ -163,7 +163,7 @@ router.post('/payments/checkout', requireAuth, async (req, res) => {
 router.get('/payments/:reference/status', requireAuth, async (req, res) => {
   try {
     const db = getDb();
-    const order = db.prepare('SELECT * FROM payment_orders WHERE reference = ? AND user_id = ?').get(req.params.reference, req.user.id);
+    const order = await db.get('SELECT * FROM payment_orders WHERE reference = ? AND user_id = ?', req.params.reference, req.user.id);
     if (!order) {
       return res.status(404).json({ success: false, error: { code: 'TRANSACTION_NOT_FOUND', message: 'Transaction introuvable.' } });
     }
@@ -173,7 +173,7 @@ router.get('/payments/:reference/status', requireAuth, async (req, res) => {
       const remote = await fetchGeniusPayPaymentStatus(order.reference);
       const remoteStatus = String(remote?.status || '').toLowerCase();
       if (remote && ['completed', 'paid', 'succeeded', 'success'].includes(remoteStatus)) {
-        fulfillment = fulfillPaymentOrder(db, order.reference, remote);
+        fulfillment = await fulfillPaymentOrder(db, order.reference, remote);
         if (fulfillment.ok && !fulfillment.alreadyFulfilled) {
           emitToUser(order.user_id, {
             type: 'payment_completed',
@@ -182,15 +182,16 @@ router.get('/payments/:reference/status', requireAuth, async (req, res) => {
           });
         }
       } else if (remote && ['failed', 'cancelled', 'expired'].includes(remoteStatus)) {
-        db.prepare('UPDATE payment_orders SET status = ? WHERE reference = ? AND fulfilled = 0').run(
+        await db.run(
+          'UPDATE payment_orders SET status = ? WHERE reference = ? AND fulfilled = 0',
           remoteStatus,
           order.reference
         );
       }
     }
 
-    const refreshed = db.prepare('SELECT * FROM payment_orders WHERE reference = ?').get(order.reference);
-    const updatedUser = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+    const refreshed = await db.get('SELECT * FROM payment_orders WHERE reference = ?', order.reference);
+    const updatedUser = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
 
     return res.json({
       success: true,
@@ -209,8 +210,8 @@ router.get('/payments/:reference/status', requireAuth, async (req, res) => {
 });
 
 // Sandbox checkout completion endpoint: constructs a REAL GeniusPay HMAC-SHA256 webhook & processes it
-router.post('/payments/sandbox/complete', requireAuth, (req, res) => {
-  if (config.nodeEnv === 'production' || (!config.geniusPay.useLocalSimulator && config.geniusPay.env === 'live')) {
+router.post('/payments/sandbox/complete', requireAuth, asyncHandler(async (req, res) => {
+  if (!config.allowSandboxSimulators || (!config.geniusPay.useLocalSimulator && config.geniusPay.env === 'live')) {
     return res.status(403).json({ success: false, error: { code: 'SANDBOX_DISABLED', message: 'Simulation interdite en production.' } });
   }
   const { reference, paymentMethod = 'wave', outcome = 'success' } = req.body || {};
@@ -218,7 +219,7 @@ router.post('/payments/sandbox/complete', requireAuth, (req, res) => {
     return res.status(422).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'reference requise.' } });
   }
   const db = getDb();
-  const order = db.prepare('SELECT * FROM payment_orders WHERE reference = ? AND user_id = ?').get(reference, req.user.id);
+  const order = await db.get('SELECT * FROM payment_orders WHERE reference = ? AND user_id = ?', reference, req.user.id);
   if (!order) {
     return res.status(404).json({ success: false, error: { code: 'TRANSACTION_NOT_FOUND', message: 'Commande introuvable.' } });
   }
@@ -257,18 +258,18 @@ router.post('/payments/sandbox/complete', requireAuth, (req, res) => {
 
   let fulfillment = null;
   if (eventType === 'payment.success') {
-    fulfillment = fulfillPaymentOrder(db, order.reference, payload.data);
+    fulfillment = await fulfillPaymentOrder(db, order.reference, payload.data);
     emitToUser(order.user_id, {
       type: 'payment_completed',
       reference: order.reference,
       grantedSummary: fulfillment.grantedSummary,
     });
   } else {
-    db.prepare("UPDATE payment_orders SET status = 'failed' WHERE reference = ? AND fulfilled = 0").run(order.reference);
+    await db.run("UPDATE payment_orders SET status = 'failed' WHERE reference = ? AND fulfilled = 0", order.reference);
   }
 
-  const updatedUser = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  const updatedOrder = db.prepare('SELECT * FROM payment_orders WHERE reference = ?').get(order.reference);
+  const updatedUser = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
+  const updatedOrder = await db.get('SELECT * FROM payment_orders WHERE reference = ?', order.reference);
 
   return res.json({
     success: true,
@@ -280,10 +281,10 @@ router.post('/payments/sandbox/complete', requireAuth, (req, res) => {
       user: formatSelfUser(updatedUser),
     },
   });
-});
+}));
 
 // Official GeniusPay Webhook Receiver (HMAC-SHA256 verified against rawBody)
-router.post('/webhooks/geniuspay', (req, res) => {
+router.post('/webhooks/geniuspay', asyncHandler(async (req, res) => {
   const signature = req.header('X-Webhook-Signature');
   const timestamp = req.header('X-Webhook-Timestamp');
   const eventHeader = req.header('X-Webhook-Event');
@@ -309,7 +310,7 @@ router.post('/webhooks/geniuspay', (req, res) => {
 
   if (reference) {
     if (event === 'payment.success' || event === 'payment.completed') {
-      const result = fulfillPaymentOrder(db, reference, payload.data);
+      const result = await fulfillPaymentOrder(db, reference, payload.data);
       if (!result.ok && result.error?.includes('Montant')) {
         return res.status(422).json({
           success: false,
@@ -325,11 +326,11 @@ router.post('/webhooks/geniuspay', (req, res) => {
       }
     } else if (event === 'payment.failed' || event === 'payment.cancelled' || event === 'payment.expired') {
       const nextStatus = event.replace('payment.', '');
-      db.prepare('UPDATE payment_orders SET status = ? WHERE reference = ? AND fulfilled = 0').run(nextStatus, reference);
+      await db.run('UPDATE payment_orders SET status = ? WHERE reference = ? AND fulfilled = 0', nextStatus, reference);
     }
   }
 
   return res.json({ received: true, event, reference });
-});
+}));
 
 export default router;

@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import express from 'express';
 import { config } from '../config.js';
 import { getDb, normalizeRows } from '../db/database.js';
+import { purgeDemoData } from '../db/seed.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requireAuth } from '../middleware/auth.js';
 import { createRateLimiter } from '../middleware/rateLimit.js';
 import { computeTrustScore, getDailyChallenge } from '../services/antiScamService.js';
@@ -9,7 +11,7 @@ import {
   getLatestUserVerification,
   listVerificationQueue,
   processSelfieSubmission,
-  resolvePrivateSelfieFile,
+  resolvePrivateSelfieMedia,
   reviewVerification,
 } from '../services/selfieVerificationService.js';
 import { formatSelfUser, purgeUserAccount } from './auth.js';
@@ -46,10 +48,10 @@ function requireModerationAdmin(req, res, next) {
   return next();
 }
 
-router.get('/challenge', requireAuth, (req, res) => {
+router.get('/challenge', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  const latestVerification = getLatestUserVerification(db, req.user.id);
+  const user = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
+  const latestVerification = await getLatestUserVerification(db, req.user.id);
   return res.json({
     success: true,
     data: {
@@ -68,12 +70,12 @@ router.get('/challenge', requireAuth, (req, res) => {
       },
     },
   });
-});
+}));
 
-router.post('/verify-selfie', requireAuth, async (req, res) => {
+router.post('/verify-selfie', requireAuth, asyncHandler(async (req, res) => {
   const { challengeCode, imageBase64, selfieSnapshot } = req.body || {};
   const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  const user = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
 
   const result = await processSelfieSubmission(db, user, {
     challengeCode,
@@ -87,7 +89,7 @@ router.post('/verify-selfie', requireAuth, async (req, res) => {
     });
   }
 
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  const updated = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
   return res.json({
     success: true,
     data: {
@@ -95,21 +97,21 @@ router.post('/verify-selfie', requireAuth, async (req, res) => {
       user: formatSelfUser(updated),
     },
   });
-});
+}));
 
-router.get('/admin/verifications', requireModerationAdmin, (req, res) => {
+router.get('/admin/verifications', requireModerationAdmin, asyncHandler(async (req, res) => {
   const db = getDb();
   const status = String(req.query.status || 'pending_review');
-  const verifications = listVerificationQueue(db, status);
+  const verifications = await listVerificationQueue(db, status);
   return res.json({
     success: true,
     data: { verifications },
   });
-});
+}));
 
-router.get('/admin/verifications/:id/image', requireModerationAdmin, (req, res) => {
+router.get('/admin/verifications/:id/image', requireModerationAdmin, asyncHandler(async (req, res) => {
   const db = getDb();
-  const resolved = resolvePrivateSelfieFile(db, req.params.id);
+  const resolved = await resolvePrivateSelfieMedia(db, req.params.id);
   if (!resolved) {
     return res.status(404).json({
       success: false,
@@ -118,13 +120,13 @@ router.get('/admin/verifications/:id/image', requireModerationAdmin, (req, res) 
   }
   res.setHeader('Content-Type', resolved.mimeType);
   res.setHeader('Cache-Control', 'no-store');
-  return res.sendFile(resolved.fullPath);
-});
+  return res.send(resolved.buffer);
+}));
 
-router.post('/admin/verifications/:id/review', requireModerationAdmin, (req, res) => {
+router.post('/admin/verifications/:id/review', requireModerationAdmin, asyncHandler(async (req, res) => {
   const { decision, note } = req.body || {};
   const db = getDb();
-  const result = reviewVerification(db, req.params.id, { decision, note });
+  const result = await reviewVerification(db, req.params.id, { decision, note });
   if (!result.ok) {
     return res.status(result.status).json({
       success: false,
@@ -135,26 +137,24 @@ router.post('/admin/verifications/:id/review', requireModerationAdmin, (req, res
     success: true,
     data: result.data,
   });
-});
+}));
 
-router.get('/admin/reports', requireModerationAdmin, (_req, res) => {
+router.get('/admin/reports', requireModerationAdmin, asyncHandler(async (_req, res) => {
   const db = getDb();
   const reports = normalizeRows(
-    db
-      .prepare(
-        `SELECT br.id, br.action_type, br.reason, br.created_at,
-                rep.id AS reporter_id, rep.name AS reporter_name,
-                tgt.id AS target_id, tgt.name AS target_name, tgt.age AS target_age,
-                tgt.commune AS target_commune, tgt.avatar_url AS target_avatar_url,
-                tgt.trust_score AS target_trust_score, tgt.verified_225 AS target_verified_225,
-                (SELECT COUNT(*) FROM blocks_reports br2 WHERE br2.target_id = tgt.id AND br2.action_type = 'report') AS total_reports
-         FROM blocks_reports br
-         JOIN users rep ON rep.id = br.reporter_id
-         JOIN users tgt ON tgt.id = br.target_id
-         WHERE br.action_type = 'report'
-         ORDER BY br.id DESC LIMIT 50`
-      )
-      .all()
+    await db.all(
+      `SELECT br.id, br.action_type, br.reason, br.created_at,
+              rep.id AS reporter_id, rep.name AS reporter_name,
+              tgt.id AS target_id, tgt.name AS target_name, tgt.age AS target_age,
+              tgt.commune AS target_commune, tgt.avatar_url AS target_avatar_url,
+              tgt.trust_score AS target_trust_score, tgt.verified_225 AS target_verified_225,
+              (SELECT COUNT(*) FROM blocks_reports br2 WHERE br2.target_id = tgt.id AND br2.action_type = 'report') AS total_reports
+       FROM blocks_reports br
+       JOIN users rep ON rep.id = br.reporter_id
+       JOIN users tgt ON tgt.id = br.target_id
+       WHERE br.action_type = 'report'
+       ORDER BY br.id DESC LIMIT 50`
+    )
   ).map((r) => ({
     id: r.id,
     actionType: r.action_type,
@@ -176,11 +176,11 @@ router.get('/admin/reports', requireModerationAdmin, (_req, res) => {
     success: true,
     data: { reports },
   });
-});
+}));
 
-router.delete('/admin/users/:id', requireModerationAdmin, (req, res) => {
+router.delete('/admin/users/:id', requireModerationAdmin, asyncHandler(async (req, res) => {
   const db = getDb();
-  const result = purgeUserAccount(db, req.params.id);
+  const result = await purgeUserAccount(db, req.params.id);
   if (!result.deleted) {
     return res.status(404).json({
       success: false,
@@ -188,9 +188,15 @@ router.delete('/admin/users/:id', requireModerationAdmin, (req, res) => {
     });
   }
   return res.json({ success: true, data: result });
-});
+}));
 
-router.post('/report', requireAuth, (req, res) => {
+router.post('/admin/purge-demo', requireModerationAdmin, asyncHandler(async (_req, res) => {
+  const db = getDb();
+  const result = await purgeDemoData(db);
+  return res.json({ success: true, data: result });
+}));
+
+router.post('/report', requireAuth, asyncHandler(async (req, res) => {
   const { targetId, reason = 'Comportement suspect ou arnaque', alsoBlock = true } = req.body || {};
   if (!targetId) {
     return res.status(422).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'targetId requis.' } });
@@ -200,35 +206,45 @@ router.post('/report', requireAuth, (req, res) => {
   }
 
   const db = getDb();
-  const target = db.prepare('SELECT id FROM users WHERE id = ?').get(targetId);
+  const target = await db.get('SELECT id FROM users WHERE id = ?', targetId);
   if (!target) {
     return res.status(404).json({ success: false, error: { code: 'TARGET_NOT_FOUND', message: 'Profil cible introuvable.' } });
   }
 
   const cleanReason = String(reason).slice(0, 300);
-  const existingReport = db
-    .prepare("SELECT id FROM blocks_reports WHERE reporter_id = ? AND target_id = ? AND action_type = 'report'")
-    .get(req.user.id, targetId);
+  const existingReport = await db.get(
+    "SELECT id FROM blocks_reports WHERE reporter_id = ? AND target_id = ? AND action_type = 'report'",
+    req.user.id,
+    targetId
+  );
   if (!existingReport) {
-    db.prepare(
+    await db.run(
       `INSERT INTO blocks_reports (reporter_id, target_id, action_type, reason)
-       VALUES (?, ?, 'report', ?)`
-    ).run(req.user.id, targetId, cleanReason);
+       VALUES (?, ?, 'report', ?)`,
+      req.user.id,
+      targetId,
+      cleanReason
+    );
   }
 
   if (alsoBlock) {
-    const existingBlock = db
-      .prepare("SELECT id FROM blocks_reports WHERE reporter_id = ? AND target_id = ? AND action_type = 'block'")
-      .get(req.user.id, targetId);
+    const existingBlock = await db.get(
+      "SELECT id FROM blocks_reports WHERE reporter_id = ? AND target_id = ? AND action_type = 'block'",
+      req.user.id,
+      targetId
+    );
     if (!existingBlock) {
-      db.prepare(
+      await db.run(
         `INSERT INTO blocks_reports (reporter_id, target_id, action_type, reason)
-         VALUES (?, ?, 'block', ?)`
-      ).run(req.user.id, targetId, cleanReason);
+         VALUES (?, ?, 'block', ?)`,
+        req.user.id,
+        targetId,
+        cleanReason
+      );
     }
   }
 
-  const targetNewScore = computeTrustScore(db, targetId);
+  const targetNewScore = await computeTrustScore(db, targetId);
   return res.json({
     success: true,
     data: {
@@ -237,9 +253,9 @@ router.post('/report', requireAuth, (req, res) => {
       targetTrustScore: targetNewScore,
     },
   });
-});
+}));
 
-router.post('/block', requireAuth, (req, res) => {
+router.post('/block', requireAuth, asyncHandler(async (req, res) => {
   const { targetId, reason = 'Bloqué par l’utilisateur' } = req.body || {};
   if (!targetId) {
     return res.status(422).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'targetId requis.' } });
@@ -248,22 +264,27 @@ router.post('/block', requireAuth, (req, res) => {
     return res.status(422).json({ success: false, error: { code: 'SELF_ACTION_FORBIDDEN', message: 'Impossible de vous bloquer vous-même.' } });
   }
   const db = getDb();
-  const target = db.prepare('SELECT id FROM users WHERE id = ?').get(targetId);
+  const target = await db.get('SELECT id FROM users WHERE id = ?', targetId);
   if (!target) {
     return res.status(404).json({ success: false, error: { code: 'TARGET_NOT_FOUND', message: 'Profil cible introuvable.' } });
   }
 
-  const existingBlock = db
-    .prepare("SELECT id FROM blocks_reports WHERE reporter_id = ? AND target_id = ? AND action_type = 'block'")
-    .get(req.user.id, targetId);
+  const existingBlock = await db.get(
+    "SELECT id FROM blocks_reports WHERE reporter_id = ? AND target_id = ? AND action_type = 'block'",
+    req.user.id,
+    targetId
+  );
   if (!existingBlock) {
-    db.prepare(
+    await db.run(
       `INSERT INTO blocks_reports (reporter_id, target_id, action_type, reason)
-       VALUES (?, ?, 'block', ?)`
-    ).run(req.user.id, targetId, String(reason).slice(0, 300));
+       VALUES (?, ?, 'block', ?)`,
+      req.user.id,
+      targetId,
+      String(reason).slice(0, 300)
+    );
   }
 
   return res.json({ success: true, data: { blocked: true } });
-});
+}));
 
 export default router;

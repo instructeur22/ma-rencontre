@@ -60,17 +60,17 @@ async function sendResetEmail({ toEmail, userName, code }) {
   return null;
 }
 
-function findUserByIdentifier(db, rawIdentifier) {
+async function findUserByIdentifier(db, rawIdentifier) {
   const clean = String(rawIdentifier || '').trim();
   if (!clean) return null;
   if (clean.includes('@')) {
-    return db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)').get(clean);
+    return db.get('SELECT * FROM users WHERE lower(email) = lower(?)', clean);
   }
   const normalizedPhone = normalizePhoneE164(clean);
   if (normalizedPhone) {
-    return db.prepare('SELECT * FROM users WHERE phone = ?').get(normalizedPhone);
+    return db.get('SELECT * FROM users WHERE phone = ?', normalizedPhone);
   }
-  return db.prepare('SELECT * FROM users WHERE lower(email) = lower(?) OR phone = ?').get(clean, clean);
+  return db.get('SELECT * FROM users WHERE lower(email) = lower(?) OR phone = ?', clean, clean);
 }
 
 /**
@@ -89,7 +89,7 @@ export async function requestPasswordReset(db, rawIdentifier) {
 
   const whatsappReady = hasWhatsappDeliveryConfigured();
   const emailReady = hasEmailDeliveryConfigured();
-  if (config.nodeEnv === 'production' && !whatsappReady && !emailReady) {
+  if (!config.allowSandboxSimulators && !whatsappReady && !emailReady) {
     return {
       ok: false,
       status: 503,
@@ -98,7 +98,7 @@ export async function requestPasswordReset(db, rawIdentifier) {
     };
   }
 
-  const user = findUserByIdentifier(db, identifier);
+  const user = await findUserByIdentifier(db, identifier);
   if (!user) {
     return {
       ok: true,
@@ -111,13 +111,12 @@ export async function requestPasswordReset(db, rawIdentifier) {
     };
   }
 
-  const latest = db
-    .prepare(
-      `SELECT id, created_at FROM password_reset_challenges
-       WHERE user_id = ? AND used_at IS NULL
-       ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(user.id);
+  const latest = await db.get(
+    `SELECT id, created_at FROM password_reset_challenges
+     WHERE user_id = ? AND used_at IS NULL
+     ORDER BY created_at DESC LIMIT 1`,
+    user.id
+  );
 
   if (latest?.created_at) {
     const createdMs = Date.parse(latest.created_at);
@@ -147,7 +146,7 @@ export async function requestPasswordReset(db, rawIdentifier) {
     delivery = { channel: 'whatsapp', provider: waRes.provider, simulated: false };
   } else if (user.email && emailReady) {
     delivery = await sendResetEmail({ toEmail: user.email, userName: user.name, code });
-  } else if (config.nodeEnv !== 'production') {
+  } else if (config.allowSandboxSimulators) {
     delivery = { channel: user.phone ? 'whatsapp' : 'email', provider: 'local_simulator', simulated: true };
   } else {
     return {
@@ -158,11 +157,19 @@ export async function requestPasswordReset(db, rawIdentifier) {
     };
   }
 
-  db.prepare(
+  await db.run(
     `INSERT INTO password_reset_challenges (
       id, user_id, identifier, channel, code_hash, salt, attempts, max_attempts, expires_at, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, 0, 5, ?, ?)`
-  ).run(challengeId, user.id, identifier.slice(0, 120), delivery.channel, codeHash, salt, expiresIso, nowIso);
+    ) VALUES (?, ?, ?, ?, ?, ?, 0, 5, ?, ?)`,
+    challengeId,
+    user.id,
+    identifier.slice(0, 120),
+    delivery.channel,
+    codeHash,
+    salt,
+    expiresIso,
+    nowIso
+  );
 
   const data = {
     sent: true,
@@ -175,7 +182,7 @@ export async function requestPasswordReset(db, rawIdentifier) {
       : `Si un compte correspond à cet identifiant, un code à 6 chiffres a été envoyé via ${delivery.channel === 'whatsapp' ? 'WhatsApp' : 'Email'}.`,
   };
 
-  if (delivery.simulated && config.nodeEnv !== 'production') {
+  if (delivery.simulated && config.allowSandboxSimulators) {
     data.devResetCode = code;
   }
 
@@ -185,7 +192,7 @@ export async function requestPasswordReset(db, rawIdentifier) {
 /**
  * Verify reset code and update the user's bcrypt password hash.
  */
-export function confirmPasswordReset(db, { identifier, code, newPassword }) {
+export async function confirmPasswordReset(db, { identifier, code, newPassword }) {
   const cleanIdentifier = String(identifier || '').trim();
   const cleanCode = String(code || '').trim();
 
@@ -206,7 +213,7 @@ export function confirmPasswordReset(db, { identifier, code, newPassword }) {
     };
   }
 
-  const user = findUserByIdentifier(db, cleanIdentifier);
+  const user = await findUserByIdentifier(db, cleanIdentifier);
   if (!user) {
     return {
       ok: false,
@@ -216,13 +223,12 @@ export function confirmPasswordReset(db, { identifier, code, newPassword }) {
     };
   }
 
-  const challenge = db
-    .prepare(
-      `SELECT * FROM password_reset_challenges
-       WHERE user_id = ? AND used_at IS NULL
-       ORDER BY created_at DESC LIMIT 1`
-    )
-    .get(user.id);
+  const challenge = await db.get(
+    `SELECT * FROM password_reset_challenges
+     WHERE user_id = ? AND used_at IS NULL
+     ORDER BY created_at DESC LIMIT 1`,
+    user.id
+  );
 
   if (!challenge) {
     return { ok: false, status: 404, code: 'RESET_NOT_FOUND', message: 'Aucune demande de réinitialisation active.' };
@@ -235,7 +241,7 @@ export function confirmPasswordReset(db, { identifier, code, newPassword }) {
   }
 
   const nextAttempts = Number(challenge.attempts) + 1;
-  db.prepare('UPDATE password_reset_challenges SET attempts = ? WHERE id = ?').run(nextAttempts, challenge.id);
+  await db.run('UPDATE password_reset_challenges SET attempts = ? WHERE id = ?', nextAttempts, challenge.id);
 
   const expectedHash = hashOtpCode(cleanCode, challenge.salt);
   if (!timingSafeHexEqual(expectedHash, challenge.code_hash)) {
@@ -250,8 +256,8 @@ export function confirmPasswordReset(db, { identifier, code, newPassword }) {
 
   const nowIso = new Date().toISOString();
   const nextHash = bcrypt.hashSync(String(newPassword), 10);
-  db.prepare('UPDATE password_reset_challenges SET used_at = ? WHERE id = ?').run(nowIso, challenge.id);
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(nextHash, user.id);
+  await db.run('UPDATE password_reset_challenges SET used_at = ? WHERE id = ?', nowIso, challenge.id);
+  await db.run('UPDATE users SET password_hash = ? WHERE id = ?', nextHash, user.id);
 
   return {
     ok: true,

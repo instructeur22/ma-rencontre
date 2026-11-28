@@ -1,12 +1,11 @@
 import express from 'express';
 import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
-import { config } from '../config.js';
-import { getDb, normalizeRows } from '../db/database.js';
+import { getDb } from '../db/database.js';
 import { requireAuth } from '../middleware/auth.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import { getBlockedUserIds, inspectMessageForScamSignals } from '../services/antiScamService.js';
 import { computeCompatibility, parseJsonSafe } from '../services/matchingService.js';
+import { saveMediaFile } from '../services/mediaStorageService.js';
 import { STORE_CATALOG, getEffectiveSubscriptionTier, spendCauris } from '../services/monetizationService.js';
 import { createMatchPair } from './matching.js';
 import { emitToUser } from '../ws/realtime.js';
@@ -15,20 +14,21 @@ const router = express.Router();
 const MAX_VOICE_BYTES = 4 * 1024 * 1024;
 const MAX_MESSAGE_LENGTH = 2000;
 
-function getMatchPartner(db, matchId, userId) {
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+async function getMatchPartner(db, matchId, userId) {
+  const match = await db.get('SELECT * FROM matches WHERE id = ?', matchId);
   if (!match) return null;
   if (match.user_a !== userId && match.user_b !== userId) return null;
   const partnerId = match.user_a === userId ? match.user_b : match.user_a;
-  if (getBlockedUserIds(db, userId).has(partnerId)) return null;
-  const partner = db.prepare('SELECT * FROM users WHERE id = ?').get(partnerId);
+  const blocked = await getBlockedUserIds(db, userId);
+  if (blocked.has(partnerId)) return null;
+  const partner = await db.get('SELECT * FROM users WHERE id = ?', partnerId);
   if (!partner) return null;
   return { match, partner };
 }
 
 function scheduleDemoReplyIfApplicable(db, matchId, sender, partner, userContent) {
   if (!partner || !partner.is_demo_bot) return;
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
       const lower = (userContent || '').toLowerCase();
       let replyText = `Merci pour ton message ${sender.name} ! Ça me fait vraiment plaisir. Tu es dans quel coin cette semaine ?`;
@@ -43,33 +43,41 @@ function scheduleDemoReplyIfApplicable(db, matchId, sender, partner, userContent
       }
 
       const msgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
-      db.prepare(
+      await db.run(
         `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content)
-         VALUES (?, ?, ?, ?, 'text', ?)`
-      ).run(msgId, matchId, partner.id, sender.id, replyText);
-
-      const saved = db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId);
-      emitToUser(sender.id, {
-        type: 'message',
+         VALUES (?, ?, ?, ?, 'text', ?)`,
+        msgId,
         matchId,
-        message: { ...saved },
-      });
+        partner.id,
+        sender.id,
+        replyText
+      );
+
+      const saved = await db.get('SELECT * FROM messages WHERE id = ?', msgId);
+      if (saved) {
+        emitToUser(sender.id, {
+          type: 'message',
+          matchId,
+          message: { ...saved },
+        });
+      }
     } catch {
       // Ignore if test DB closed
     }
   }, 900);
 }
 
-router.get('/:matchId/messages', requireAuth, (req, res) => {
+router.get('/:matchId/messages', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
-  const ctx = getMatchPartner(db, req.params.matchId, req.user.id);
+  const ctx = await getMatchPartner(db, req.params.matchId, req.user.id);
   if (!ctx) {
     return res.status(404).json({ success: false, error: { code: 'MATCH_NOT_FOUND', message: 'Conversation introuvable.' } });
   }
 
-  db.prepare('UPDATE messages SET is_read = 1 WHERE match_id = ? AND recipient_id = ?').run(ctx.match.id, req.user.id);
-  const messages = normalizeRows(
-    db.prepare('SELECT * FROM messages WHERE match_id = ? ORDER BY created_at ASC, rowid ASC').all(ctx.match.id)
+  await db.run('UPDATE messages SET is_read = 1 WHERE match_id = ? AND recipient_id = ?', ctx.match.id, req.user.id);
+  const messages = await db.all(
+    'SELECT * FROM messages WHERE match_id = ? ORDER BY created_at ASC, id ASC',
+    ctx.match.id
   );
 
   return res.json({
@@ -79,9 +87,9 @@ router.get('/:matchId/messages', requireAuth, (req, res) => {
       messages,
     },
   });
-});
+}));
 
-router.post('/:matchId/messages', requireAuth, (req, res) => {
+router.post('/:matchId/messages', requireAuth, asyncHandler(async (req, res) => {
   const { content } = req.body || {};
   const cleanContent = String(content || '').trim();
   if (!cleanContent) {
@@ -92,7 +100,7 @@ router.post('/:matchId/messages', requireAuth, (req, res) => {
   }
 
   const db = getDb();
-  const ctx = getMatchPartner(db, req.params.matchId, req.user.id);
+  const ctx = await getMatchPartner(db, req.params.matchId, req.user.id);
   if (!ctx) {
     return res.status(404).json({ success: false, error: { code: 'MATCH_NOT_FOUND', message: 'Conversation introuvable.' } });
   }
@@ -100,10 +108,9 @@ router.post('/:matchId/messages', requireAuth, (req, res) => {
   const scamCheck = inspectMessageForScamSignals(cleanContent);
   const msgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
 
-  db.prepare(
+  await db.run(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content, scam_flagged, scam_reason)
-     VALUES (?, ?, ?, ?, 'text', ?, ?, ?)`
-  ).run(
+     VALUES (?, ?, ?, ?, 'text', ?, ?, ?)`,
     msgId,
     ctx.match.id,
     req.user.id,
@@ -113,7 +120,7 @@ router.post('/:matchId/messages', requireAuth, (req, res) => {
     scamCheck.reason
   );
 
-  const saved = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId) };
+  const saved = await db.get('SELECT * FROM messages WHERE id = ?', msgId);
 
   emitToUser(ctx.partner.id, {
     type: 'message',
@@ -132,9 +139,9 @@ router.post('/:matchId/messages', requireAuth, (req, res) => {
       scamCheck,
     },
   });
-});
+}));
 
-router.post('/direct', requireAuth, (req, res) => {
+router.post('/direct', requireAuth, asyncHandler(async (req, res) => {
   const { targetId, content } = req.body || {};
   const cleanContent = String(content || '').trim();
   if (!targetId || !cleanContent) {
@@ -158,14 +165,15 @@ router.post('/direct', requireAuth, (req, res) => {
       error: { code: 'SELF_DM_FORBIDDEN', message: 'Impossible de vous envoyer un DM à vous-même.' },
     });
   }
-  if (getBlockedUserIds(db, sender.id).has(targetId)) {
+  const blocked = await getBlockedUserIds(db, sender.id);
+  if (blocked.has(targetId)) {
     return res.status(403).json({
       success: false,
       error: { code: 'USER_BLOCKED', message: 'Impossible d’envoyer un message à ce profil.' },
     });
   }
 
-  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(targetId);
+  const target = await db.get('SELECT * FROM users WHERE id = ?', targetId);
   if (!target) {
     return res.status(404).json({ success: false, error: { code: 'TARGET_NOT_FOUND', message: 'Destinataire introuvable.' } });
   }
@@ -180,7 +188,7 @@ router.post('/direct', requireAuth, (req, res) => {
 
   const cost = getEffectiveSubscriptionTier(sender) === 'diaspora_vip' ? 0 : 100;
   if (cost > 0) {
-    const debit = spendCauris(db, sender.id, cost, `DM Direct à ${target.name}`, `DM-${target.id}`);
+    const debit = await spendCauris(db, sender.id, cost, `DM Direct à ${target.name}`, `DM-${target.id}`);
     if (!debit.ok) {
       return res.status(402).json({
         success: false,
@@ -190,19 +198,26 @@ router.post('/direct', requireAuth, (req, res) => {
   }
 
   const compat = computeCompatibility(sender, target);
-  const match = createMatchPair(db, sender.id, target.id, compat.score, 1);
+  const match = await createMatchPair(db, sender.id, target.id, compat.score, 1);
 
   const msgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
-  db.prepare(
+  await db.run(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content, scam_flagged, scam_reason)
-     VALUES (?, ?, ?, ?, 'text', ?, ?, ?)`
-  ).run(msgId, match.id, sender.id, target.id, cleanContent, scamCheck.flagged ? 1 : 0, scamCheck.reason);
+     VALUES (?, ?, ?, ?, 'text', ?, ?, ?)`,
+    msgId,
+    match.id,
+    sender.id,
+    target.id,
+    cleanContent,
+    scamCheck.flagged ? 1 : 0,
+    scamCheck.reason
+  );
 
-  const saved = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId) };
+  const saved = await db.get('SELECT * FROM messages WHERE id = ?', msgId);
   emitToUser(target.id, { type: 'message', matchId: match.id, message: saved });
   scheduleDemoReplyIfApplicable(db, match.id, sender, target, cleanContent);
 
-  const updated = db.prepare('SELECT cauris_balance FROM users WHERE id = ?').get(sender.id);
+  const updated = await db.get('SELECT cauris_balance FROM users WHERE id = ?', sender.id);
   return res.status(201).json({
     success: true,
     data: {
@@ -211,16 +226,16 @@ router.post('/direct', requireAuth, (req, res) => {
       caurisBalance: Number(updated.cauris_balance),
     },
   });
-});
+}));
 
-router.post('/:matchId/voice', requireAuth, (req, res) => {
+router.post('/:matchId/voice', requireAuth, asyncHandler(async (req, res) => {
   const { audioBase64, mimeType = 'audio/webm', durationSec = 6 } = req.body || {};
   if (!audioBase64 || typeof audioBase64 !== 'string') {
     return res.status(422).json({ success: false, error: { code: 'INVALID_AUDIO', message: 'Audio manquant.' } });
   }
 
   const db = getDb();
-  const ctx = getMatchPartner(db, req.params.matchId, req.user.id);
+  const ctx = await getMatchPartner(db, req.params.matchId, req.user.id);
   if (!ctx) {
     return res.status(404).json({ success: false, error: { code: 'MATCH_NOT_FOUND', message: 'Conversation introuvable.' } });
   }
@@ -236,27 +251,40 @@ router.post('/:matchId/voice', requireAuth, (req, res) => {
 
   const ext = mimeType.includes('wav') ? 'wav' : mimeType.includes('mp4') ? 'm4a' : 'webm';
   const filename = `chat_${ctx.match.id}_${Date.now()}_${crypto.randomInt(100, 999)}.${ext}`;
-  const dir = path.join(config.uploadsDir, 'voices');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, filename), decoded);
-
   const mediaUrl = `/uploads/voices/${filename}`;
+  const cleanMime = ext === 'wav' ? 'audio/wav' : ext === 'm4a' ? 'audio/mp4' : 'audio/webm';
+
+  await saveMediaFile(db, {
+    mediaPath: mediaUrl,
+    userId: req.user.id,
+    mimeType: cleanMime,
+    buffer: decoded,
+    visibility: 'public',
+  });
+
   const dur = Math.max(1, Math.min(60, Number(durationSec) || 6));
   const msgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
 
-  db.prepare(
+  await db.run(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content, media_url, metadata_json)
-     VALUES (?, ?, ?, ?, 'voice', ?, ?, ?)`
-  ).run(msgId, ctx.match.id, req.user.id, ctx.partner.id, `Note vocale (0:${String(dur).padStart(2, '0')})`, mediaUrl, JSON.stringify({ durationSec: dur }));
+     VALUES (?, ?, ?, ?, 'voice', ?, ?, ?)`,
+    msgId,
+    ctx.match.id,
+    req.user.id,
+    ctx.partner.id,
+    `Note vocale (0:${String(dur).padStart(2, '0')})`,
+    mediaUrl,
+    JSON.stringify({ durationSec: dur })
+  );
 
-  const saved = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId) };
+  const saved = await db.get('SELECT * FROM messages WHERE id = ?', msgId);
   emitToUser(ctx.partner.id, { type: 'message', matchId: ctx.match.id, message: saved });
   scheduleDemoReplyIfApplicable(db, ctx.match.id, req.user, ctx.partner, 'note vocale');
 
   return res.status(201).json({ success: true, data: { message: saved } });
-});
+}));
 
-router.post('/:matchId/gift', requireAuth, (req, res) => {
+router.post('/:matchId/gift', requireAuth, asyncHandler(async (req, res) => {
   const { giftCode } = req.body || {};
   const gift = STORE_CATALOG.culturalGifts.find((g) => g.code === giftCode);
   if (!gift) {
@@ -264,12 +292,12 @@ router.post('/:matchId/gift', requireAuth, (req, res) => {
   }
 
   const db = getDb();
-  const ctx = getMatchPartner(db, req.params.matchId, req.user.id);
+  const ctx = await getMatchPartner(db, req.params.matchId, req.user.id);
   if (!ctx) {
     return res.status(404).json({ success: false, error: { code: 'MATCH_NOT_FOUND', message: 'Conversation introuvable.' } });
   }
 
-  const debit = spendCauris(db, req.user.id, gift.costCauris, `Cadeau ${gift.name} à ${ctx.partner.name}`, `GIFT-${gift.code}`);
+  const debit = await spendCauris(db, req.user.id, gift.costCauris, `Cadeau ${gift.name} à ${ctx.partner.name}`, `GIFT-${gift.code}`);
   if (!debit.ok) {
     return res.status(402).json({
       success: false,
@@ -278,10 +306,9 @@ router.post('/:matchId/gift', requireAuth, (req, res) => {
   }
 
   const msgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
-  db.prepare(
+  await db.run(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content, metadata_json)
-     VALUES (?, ?, ?, ?, 'gift', ?, ?)`
-  ).run(
+     VALUES (?, ?, ?, ?, 'gift', ?, ?)`,
     msgId,
     ctx.match.id,
     req.user.id,
@@ -290,7 +317,7 @@ router.post('/:matchId/gift', requireAuth, (req, res) => {
     JSON.stringify(gift)
   );
 
-  const saved = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId) };
+  const saved = await db.get('SELECT * FROM messages WHERE id = ?', msgId);
   emitToUser(ctx.partner.id, { type: 'message', matchId: ctx.match.id, message: saved });
   scheduleDemoReplyIfApplicable(db, ctx.match.id, req.user, ctx.partner, `cadeau ${gift.name}`);
 
@@ -301,16 +328,16 @@ router.post('/:matchId/gift', requireAuth, (req, res) => {
       caurisBalance: debit.balance,
     },
   });
-});
+}));
 
-router.post('/:matchId/date-invite', requireAuth, (req, res) => {
+router.post('/:matchId/date-invite', requireAuth, asyncHandler(async (req, res) => {
   const { spotId, proposedDate = 'Ce week-end à 18h30', note = '' } = req.body || {};
   const db = getDb();
-  const ctx = getMatchPartner(db, req.params.matchId, req.user.id);
+  const ctx = await getMatchPartner(db, req.params.matchId, req.user.id);
   if (!ctx) {
     return res.status(404).json({ success: false, error: { code: 'MATCH_NOT_FOUND', message: 'Conversation introuvable.' } });
   }
-  const spot = db.prepare('SELECT * FROM safe_date_spots WHERE id = ?').get(spotId);
+  const spot = await db.get('SELECT * FROM safe_date_spots WHERE id = ?', spotId);
   if (!spot) {
     return res.status(404).json({ success: false, error: { code: 'SPOT_NOT_FOUND', message: 'Lieu Safe Date introuvable.' } });
   }
@@ -327,19 +354,25 @@ router.post('/:matchId/date-invite', requireAuth, (req, res) => {
     proposedBy: req.user.id,
   };
 
-  db.prepare(
+  await db.run(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content, metadata_json)
-     VALUES (?, ?, ?, ?, 'date_invite', ?, ?)`
-  ).run(msgId, ctx.match.id, req.user.id, ctx.partner.id, text, JSON.stringify(metadata));
+     VALUES (?, ?, ?, ?, 'date_invite', ?, ?)`,
+    msgId,
+    ctx.match.id,
+    req.user.id,
+    ctx.partner.id,
+    text,
+    JSON.stringify(metadata)
+  );
 
-  const saved = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId) };
+  const saved = await db.get('SELECT * FROM messages WHERE id = ?', msgId);
   emitToUser(ctx.partner.id, { type: 'message', matchId: ctx.match.id, message: saved });
   scheduleDemoReplyIfApplicable(db, ctx.match.id, req.user, ctx.partner, 'safe date');
 
   return res.status(201).json({ success: true, data: { message: saved } });
-});
+}));
 
-router.post('/:matchId/messages/:messageId/respond-date', requireAuth, (req, res) => {
+router.post('/:matchId/messages/:messageId/respond-date', requireAuth, asyncHandler(async (req, res) => {
   const { decision } = req.body || {};
   if (!['accepted', 'declined'].includes(decision)) {
     return res.status(422).json({
@@ -349,14 +382,16 @@ router.post('/:matchId/messages/:messageId/respond-date', requireAuth, (req, res
   }
 
   const db = getDb();
-  const ctx = getMatchPartner(db, req.params.matchId, req.user.id);
+  const ctx = await getMatchPartner(db, req.params.matchId, req.user.id);
   if (!ctx) {
     return res.status(404).json({ success: false, error: { code: 'MATCH_NOT_FOUND', message: 'Conversation introuvable.' } });
   }
 
-  const inviteMsg = db
-    .prepare("SELECT * FROM messages WHERE id = ? AND match_id = ? AND msg_type = 'date_invite'")
-    .get(req.params.messageId, ctx.match.id);
+  const inviteMsg = await db.get(
+    "SELECT * FROM messages WHERE id = ? AND match_id = ? AND msg_type = 'date_invite'",
+    req.params.messageId,
+    ctx.match.id
+  );
   if (!inviteMsg) {
     return res.status(404).json({ success: false, error: { code: 'INVITE_NOT_FOUND', message: 'Invitation Safe Date introuvable.' } });
   }
@@ -369,8 +404,8 @@ router.post('/:matchId/messages/:messageId/respond-date', requireAuth, (req, res
     respondedAt: new Date().toISOString(),
   };
 
-  db.prepare('UPDATE messages SET metadata_json = ? WHERE id = ?').run(JSON.stringify(nextMeta), inviteMsg.id);
-  const updatedInvite = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(inviteMsg.id) };
+  await db.run('UPDATE messages SET metadata_json = ? WHERE id = ?', JSON.stringify(nextMeta), inviteMsg.id);
+  const updatedInvite = await db.get('SELECT * FROM messages WHERE id = ?', inviteMsg.id);
 
   const spotName = meta.spot?.name || 'ce lieu Safe Date';
   const dateLabel = meta.proposedDate ? ` (${meta.proposedDate})` : '';
@@ -380,12 +415,17 @@ router.post('/:matchId/messages/:messageId/respond-date', requireAuth, (req, res
       : `${req.user.name} propose de replanifier le Safe Date à ${spotName}.`;
 
   const replyId = `msg_${crypto.randomUUID().slice(0, 12)}`;
-  db.prepare(
+  await db.run(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content)
-     VALUES (?, ?, ?, ?, 'text', ?)`
-  ).run(replyId, ctx.match.id, req.user.id, ctx.partner.id, replyText);
+     VALUES (?, ?, ?, ?, 'text', ?)`,
+    replyId,
+    ctx.match.id,
+    req.user.id,
+    ctx.partner.id,
+    replyText
+  );
 
-  const replyMessage = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(replyId) };
+  const replyMessage = await db.get('SELECT * FROM messages WHERE id = ?', replyId);
   emitToUser(ctx.partner.id, { type: 'message', matchId: ctx.match.id, message: replyMessage });
 
   return res.json({
@@ -395,6 +435,6 @@ router.post('/:matchId/messages/:messageId/respond-date', requireAuth, (req, res
       replyMessage,
     },
   });
-});
+}));
 
 export default router;

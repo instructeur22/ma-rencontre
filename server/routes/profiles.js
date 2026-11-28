@@ -1,10 +1,9 @@
 import express from 'express';
-import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
-import { getDb, normalizeRows } from '../db/database.js';
+import { getDb } from '../db/database.js';
 import { requireAuth } from '../middleware/auth.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import { formatSelfUser } from './auth.js';
 import {
   computeCompatibility,
@@ -13,6 +12,7 @@ import {
   DIASPORA_HUBS,
 } from '../services/matchingService.js';
 import { computeTrustScore, getBlockedUserIds } from '../services/antiScamService.js';
+import { saveMediaFile } from '../services/mediaStorageService.js';
 import { getEffectiveSubscriptionTier, spendCauris } from '../services/monetizationService.js';
 
 const router = express.Router();
@@ -52,7 +52,7 @@ function isSafeAvatarUrl(url) {
   return /^https?:\/\/[^\s"'<>]+$/i.test(trimmed);
 }
 
-router.get('/discover', requireAuth, (req, res) => {
+router.get('/discover', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const viewer = req.user;
   const {
@@ -64,22 +64,23 @@ router.get('/discover', requireAuth, (req, res) => {
     includeSwiped = 'false',
   } = req.query;
 
-  const blockedIds = getBlockedUserIds(db, viewer.id);
-  const swipedRows = db.prepare('SELECT target_id FROM swipes WHERE actor_id = ?').all(viewer.id);
+  const blockedIds = await getBlockedUserIds(db, viewer.id);
+  const swipedRows = await db.all('SELECT target_id FROM swipes WHERE actor_id = ?', viewer.id);
   const swipedIds = new Set(swipedRows.map((r) => r.target_id));
 
-  const allCandidates = normalizeRows(db.prepare('SELECT * FROM users WHERE id != ?').all(viewer.id));
+  const incomingLikeRows = await db.all(
+    "SELECT actor_id FROM swipes WHERE target_id = ? AND action IN ('like', 'super_like')",
+    viewer.id
+  );
+  const likedViewerIds = new Set(incomingLikeRows.map((r) => r.actor_id));
+
+  const allCandidates = await db.all('SELECT * FROM users WHERE id != ?', viewer.id);
 
   const filtered = allCandidates
     .filter((cand) => {
       if (blockedIds.has(cand.id)) return false;
       if (includeSwiped !== 'true' && swipedIds.has(cand.id)) return false;
-      if (cand.incognito) {
-        const likedViewer = db
-          .prepare("SELECT 1 FROM swipes WHERE actor_id = ? AND target_id = ? AND action IN ('like', 'super_like')")
-          .get(cand.id, viewer.id);
-        if (!likedViewer) return false;
-      }
+      if (cand.incognito && !likedViewerIds.has(cand.id)) return false;
       if (!matchesLookingFor(viewer, cand)) return false;
       if (commune !== 'all' && cand.commune !== commune && cand.city !== commune && cand.passport_target_city !== commune) {
         return false;
@@ -103,13 +104,13 @@ router.get('/discover', requireAuth, (req, res) => {
       total: filtered.length,
     },
   });
-});
+}));
 
-router.get('/tonight', requireAuth, (req, res) => {
+router.get('/tonight', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const viewer = req.user;
-  const blockedIds = getBlockedUserIds(db, viewer.id);
-  const allCandidates = normalizeRows(db.prepare('SELECT * FROM users WHERE id != ? AND tonight_available = 1').all(viewer.id));
+  const blockedIds = await getBlockedUserIds(db, viewer.id);
+  const allCandidates = await db.all('SELECT * FROM users WHERE id != ? AND tonight_available = 1', viewer.id);
 
   const list = allCandidates
     .filter((c) => !blockedIds.has(c.id) && matchesLookingFor(viewer, c))
@@ -120,15 +121,15 @@ router.get('/tonight', requireAuth, (req, res) => {
     success: true,
     data: { profiles: list },
   });
-});
+}));
 
-router.get('/:id', requireAuth, (req, res) => {
+router.get('/:id', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
-  const blockedIds = getBlockedUserIds(db, req.user.id);
+  const blockedIds = await getBlockedUserIds(db, req.user.id);
   if (blockedIds.has(req.params.id)) {
     return res.status(404).json({ success: false, error: { code: 'PROFILE_NOT_FOUND', message: 'Profil introuvable.' } });
   }
-  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  const target = await db.get('SELECT * FROM users WHERE id = ?', req.params.id);
   if (!target) {
     return res.status(404).json({ success: false, error: { code: 'PROFILE_NOT_FOUND', message: 'Profil introuvable.' } });
   }
@@ -139,9 +140,9 @@ router.get('/:id', requireAuth, (req, res) => {
       compatibility: computeCompatibility(req.user, target),
     },
   });
-});
+}));
 
-router.put('/me', requireAuth, (req, res) => {
+router.put('/me', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const current = req.user;
   const {
@@ -187,13 +188,12 @@ router.put('/me', requireAuth, (req, res) => {
   const nextCity = String(city ?? current.city).slice(0, 80);
   const isDiaspora = DIASPORA_HUBS.includes(nextCommune) || DIASPORA_HUBS.includes(nextCity) ? 1 : 0;
 
-  db.prepare(
+  await db.run(
     `UPDATE users SET
       name = ?, age = ?, gender = ?, looking_for = ?, commune = ?, city = ?, is_diaspora = ?,
       intention = ?, profession = ?, bio = ?, secret_prompt = ?, avatar_url = ?,
       tags_json = ?, vrai_babi_json = ?, tonight_available = ?, tonight_mood = ?
-     WHERE id = ?`
-  ).run(
+     WHERE id = ?`,
     nextName,
     age !== undefined ? Number(age) : current.age,
     nextGender,
@@ -213,15 +213,15 @@ router.put('/me', requireAuth, (req, res) => {
     current.id
   );
 
-  computeTrustScore(db, current.id);
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(current.id);
+  await computeTrustScore(db, current.id);
+  const updated = await db.get('SELECT * FROM users WHERE id = ?', current.id);
   return res.json({
     success: true,
     data: { user: formatSelfUser(updated) },
   });
-});
+}));
 
-router.post('/me/voice', requireAuth, (req, res) => {
+router.post('/me/voice', requireAuth, asyncHandler(async (req, res) => {
   const { audioBase64, mimeType = 'audio/webm', durationSec = 8 } = req.body || {};
   if (!audioBase64 || typeof audioBase64 !== 'string') {
     return res.status(422).json({
@@ -241,20 +241,27 @@ router.post('/me/voice', requireAuth, (req, res) => {
 
   const ext = mimeType.includes('wav') ? 'wav' : mimeType.includes('mp4') || mimeType.includes('m4a') ? 'm4a' : 'webm';
   const filename = `${req.user.id}_${Date.now()}_${crypto.randomInt(100, 999)}.${ext}`;
-  const uploadDir = path.join(config.uploadsDir, 'voices');
-  fs.mkdirSync(uploadDir, { recursive: true });
-  fs.writeFileSync(path.join(uploadDir, filename), decoded);
-
   const voiceUrl = `/uploads/voices/${filename}`;
+  const cleanMime = ext === 'wav' ? 'audio/wav' : ext === 'm4a' ? 'audio/mp4' : 'audio/webm';
+
   const db = getDb();
-  db.prepare('UPDATE users SET voice_note_url = ?, voice_duration_sec = ? WHERE id = ?').run(
+  await saveMediaFile(db, {
+    mediaPath: voiceUrl,
+    userId: req.user.id,
+    mimeType: cleanMime,
+    buffer: decoded,
+    visibility: 'public',
+  });
+
+  await db.run(
+    'UPDATE users SET voice_note_url = ?, voice_duration_sec = ? WHERE id = ?',
     voiceUrl,
     Math.max(1, Math.min(30, Number(durationSec) || 8)),
     req.user.id
   );
 
-  const trustScore = computeTrustScore(db, req.user.id);
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  const trustScore = await computeTrustScore(db, req.user.id);
+  const updated = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
 
   return res.json({
     success: true,
@@ -265,9 +272,9 @@ router.post('/me/voice', requireAuth, (req, res) => {
       user: formatSelfUser(updated),
     },
   });
-});
+}));
 
-router.post('/me/avatar', requireAuth, (req, res) => {
+router.post('/me/avatar', requireAuth, asyncHandler(async (req, res) => {
   const { imageBase64 } = req.body || {};
   if (!imageBase64 || typeof imageBase64 !== 'string') {
     return res.status(422).json({
@@ -306,14 +313,19 @@ router.post('/me/avatar', requireAuth, (req, res) => {
   }
 
   const filename = `${req.user.id}_${Date.now()}_${crypto.randomInt(100, 999)}.${ext}`;
-  const uploadDir = path.join(config.uploadsDir, 'avatars');
-  fs.mkdirSync(uploadDir, { recursive: true });
-  fs.writeFileSync(path.join(uploadDir, filename), decoded);
-
   const avatarUrl = `/uploads/avatars/${filename}`;
+  const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+
   const db = getDb();
-  db.prepare('UPDATE users SET avatar_url = ? WHERE id = ?').run(avatarUrl, req.user.id);
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  await saveMediaFile(db, {
+    mediaPath: avatarUrl,
+    userId: req.user.id,
+    mimeType,
+    buffer: decoded,
+    visibility: 'public',
+  });
+  await db.run('UPDATE users SET avatar_url = ? WHERE id = ?', avatarUrl, req.user.id);
+  const updated = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
 
   return res.json({
     success: true,
@@ -322,16 +334,16 @@ router.post('/me/avatar', requireAuth, (req, res) => {
       user: formatSelfUser(updated),
     },
   });
-});
+}));
 
-router.post('/me/passport', requireAuth, (req, res) => {
+router.post('/me/passport', requireAuth, asyncHandler(async (req, res) => {
   const { active = true, targetCity = 'Abidjan', arrivalDate = '', departureDate = '' } = req.body || {};
   const db = getDb();
   const user = req.user;
   const tier = getEffectiveSubscriptionTier(user);
 
   if (active && tier !== 'diaspora_vip' && !user.passport_active) {
-    const debit = spendCauris(db, user.id, 200, `Activation Passeport Babi (${targetCity})`, 'PASSPORT-BABI');
+    const debit = await spendCauris(db, user.id, 200, `Activation Passeport Babi (${targetCity})`, 'PASSPORT-BABI');
     if (!debit.ok) {
       return res.status(402).json({
         success: false,
@@ -343,26 +355,31 @@ router.post('/me/passport', requireAuth, (req, res) => {
     }
   }
 
-  db.prepare(
+  await db.run(
     `UPDATE users SET passport_active = ?, passport_target_city = ?, passport_arrival_date = ?, passport_departure_date = ?
-     WHERE id = ?`
-  ).run(active ? 1 : 0, String(targetCity).slice(0, 80), String(arrivalDate).slice(0, 32), String(departureDate).slice(0, 32), user.id);
+     WHERE id = ?`,
+    active ? 1 : 0,
+    String(targetCity).slice(0, 80),
+    String(arrivalDate).slice(0, 32),
+    String(departureDate).slice(0, 32),
+    user.id
+  );
 
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+  const updated = await db.get('SELECT * FROM users WHERE id = ?', user.id);
   return res.json({
     success: true,
     data: { user: formatSelfUser(updated) },
   });
-});
+}));
 
-router.post('/me/incognito', requireAuth, (req, res) => {
+router.post('/me/incognito', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const user = req.user;
   const tier = getEffectiveSubscriptionTier(user);
   const nextVal = user.incognito ? 0 : 1;
 
   if (nextVal === 1 && !['babi_gold', 'diaspora_vip'].includes(tier)) {
-    const debit = spendCauris(db, user.id, 200, 'Activation Mode Incognito 7 jours', 'INCOGNITO-7D');
+    const debit = await spendCauris(db, user.id, 200, 'Activation Mode Incognito 7 jours', 'INCOGNITO-7D');
     if (!debit.ok) {
       return res.status(402).json({
         success: false,
@@ -374,18 +391,18 @@ router.post('/me/incognito', requireAuth, (req, res) => {
     }
   }
 
-  db.prepare('UPDATE users SET incognito = ? WHERE id = ?').run(nextVal, user.id);
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+  await db.run('UPDATE users SET incognito = ? WHERE id = ?', nextVal, user.id);
+  const updated = await db.get('SELECT * FROM users WHERE id = ?', user.id);
   return res.json({
     success: true,
     data: { incognito: Boolean(nextVal), user: formatSelfUser(updated) },
   });
-});
+}));
 
-router.post('/me/boost', requireAuth, (req, res) => {
+router.post('/me/boost', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const user = req.user;
-  const debit = spendCauris(db, user.id, 150, 'Boost Visibilité Tête d’affiche 24h', 'BOOST-24H');
+  const debit = await spendCauris(db, user.id, 150, 'Boost Visibilité Tête d’affiche 24h', 'BOOST-24H');
   if (!debit.ok) {
     return res.status(402).json({
       success: false,
@@ -396,12 +413,12 @@ router.post('/me/boost', requireAuth, (req, res) => {
     });
   }
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  db.prepare('UPDATE users SET boost_expires_at = ? WHERE id = ?').run(expiresAt, user.id);
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+  await db.run('UPDATE users SET boost_expires_at = ? WHERE id = ?', expiresAt, user.id);
+  const updated = await db.get('SELECT * FROM users WHERE id = ?', user.id);
   return res.json({
     success: true,
     data: { boostExpiresAt: expiresAt, user: formatSelfUser(updated) },
   });
-});
+}));
 
 export default router;

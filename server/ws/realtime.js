@@ -77,20 +77,24 @@ export function setupWebSocket(server) {
 
       ws.send(JSON.stringify({ type: 'connected', userId, timestamp: new Date().toISOString() }));
 
-      ws.on('message', (raw) => {
+      ws.on('message', async (raw) => {
         try {
           const msg = JSON.parse(raw.toString());
           if (msg.type === 'ping') {
             ws.send(JSON.stringify({ type: 'pong' }));
           } else if (msg.type === 'typing' && msg.recipientId && msg.matchId) {
             const db = getDb();
-            const match = db
-              .prepare(
-                `SELECT id FROM matches
-                 WHERE id = ? AND ((user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?))`
-              )
-              .get(String(msg.matchId), userId, String(msg.recipientId), String(msg.recipientId), userId);
-            if (match && !getBlockedUserIds(db, userId).has(String(msg.recipientId))) {
+            const match = await db.get(
+              `SELECT id FROM matches
+               WHERE id = ? AND ((user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?))`,
+              String(msg.matchId),
+              userId,
+              String(msg.recipientId),
+              String(msg.recipientId),
+              userId
+            );
+            const blocked = match ? await getBlockedUserIds(db, userId) : null;
+            if (match && !blocked.has(String(msg.recipientId))) {
               emitToUser(String(msg.recipientId), {
                 type: 'typing',
                 matchId: match.id,

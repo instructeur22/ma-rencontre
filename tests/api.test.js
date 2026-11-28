@@ -1,16 +1,19 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocket } from 'ws';
-import { config } from '../server/config.js';
-import { setDbForTests } from '../server/db/database.js';
-import { seedDatabase } from '../server/db/seed.js';
-import { createApp } from '../server/app.js';
-import { setupWebSocket } from '../server/ws/realtime.js';
-import { signWebhookPayload } from '../server/services/geniusPayService.js';
+
+process.env.DATABASE_URL = '';
+process.env.SEED_DEMO_PROFILES = 'true';
+
+const { config } = await import('../server/config.js');
+const { SqliteDb, setDbForTests, toPgSql } = await import('../server/db/database.js');
+const { seedDatabase } = await import('../server/db/seed.js');
+const { createApp } = await import('../server/app.js');
+const { setupWebSocket } = await import('../server/ws/realtime.js');
+const { signWebhookPayload } = await import('../server/services/geniusPayService.js');
 
 let server;
 let baseUrl;
@@ -34,11 +37,10 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
   before(async () => {
     prevSimulatorFlag = config.geniusPay.useLocalSimulator;
     config.geniusPay.useLocalSimulator = true;
-    db = new DatabaseSync(':memory:');
-    const schema = fs.readFileSync(path.join(config.rootDir, 'server/db/schema.sql'), 'utf-8');
-    db.exec(schema);
+    db = new SqliteDb(':memory:');
+    await db.initSchema();
     setDbForTests(db);
-    seedDatabase(db);
+    await seedDatabase(db);
 
     const app = createApp();
     server = http.createServer(app);
@@ -51,7 +53,7 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
   after(async () => {
     config.geniusPay.useLocalSimulator = prevSimulatorFlag;
     if (server) await new Promise((resolve) => server.close(resolve));
-    if (db) db.close();
+    if (db) await db.close();
   });
 
   it('returns healthy status and full store catalog', async () => {
@@ -91,7 +93,7 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
     // 50 welcome + 50 referral bonus = 100 Cauris
     assert.equal(reg.json.data.user.caurisBalance, 100);
 
-    const ayaRow = db.prepare('SELECT cauris_balance FROM users WHERE id = ?').get('usr_aya');
+    const ayaRow = await db.get('SELECT cauris_balance FROM users WHERE id = ?', 'usr_aya');
     // Aya started with 200 + 100 referral = 300
     assert.equal(Number(ayaRow.cauris_balance), 300);
   });
@@ -336,7 +338,7 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
       },
       body: failRaw,
     });
-    const orderRow = db.prepare('SELECT status, fulfilled FROM payment_orders WHERE reference = ?').get(ref);
+    const orderRow = await db.get('SELECT status, fulfilled FROM payment_orders WHERE reference = ?', ref);
     assert.equal(orderRow.status, 'completed');
     assert.equal(orderRow.fulfilled, 1);
   });
@@ -882,5 +884,39 @@ describe('AKWABA API & GeniusPay Integration Suite', () => {
         }
       }
     }
+  });
+
+  it('converts positional placeholders to PostgreSQL, serves DB media_files, and purges demo users cleanly', async () => {
+    assert.equal(
+      toPgSql("INSERT INTO x (a, b) VALUES (?, '?literal')"),
+      "INSERT INTO x (a, b) VALUES ($1, '?literal')"
+    );
+
+    const validPng =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const uploadRes = await req('POST', '/profiles/me/avatar', { imageBase64: validPng }, kouameToken);
+    assert.equal(uploadRes.status, 200);
+    const avatarUrl = uploadRes.json.data.avatarUrl;
+    const diskAvatar = path.join(config.uploadsDir, avatarUrl.replace(/^\/uploads\//, ''));
+    if (fs.existsSync(diskAvatar)) fs.unlinkSync(diskAvatar);
+
+    // Must still be served directly from Neon/SQLite media_files table even without disk file
+    const mediaFetch = await fetch(`${baseUrl}${avatarUrl}`);
+    assert.equal(mediaFetch.status, 200);
+    assert.ok(mediaFetch.headers.get('content-type')?.includes('image/png'));
+
+    // Purge demo users via admin endpoint and confirm real registered user + safe_date_spots remain
+    const purgeRes = await req('POST', '/safety/admin/purge-demo', {}, null, {
+      'X-Admin-Secret': config.adminModerationSecret,
+    });
+    assert.equal(purgeRes.status, 200);
+    assert.ok(purgeRes.json.data.purgedUsers >= 1);
+
+    const demoStillThere = await db.get('SELECT id FROM users WHERE id = ?', 'usr_aya');
+    assert.equal(demoStillThere, null);
+    const realUser = await db.get('SELECT id FROM users WHERE lower(email) = ?', 'saliou@akwaba.ci');
+    assert.ok(realUser);
+    const spotsCount = await db.get('SELECT COUNT(*) AS cnt FROM safe_date_spots');
+    assert.ok(Number(spotsCount.cnt) >= 3);
   });
 });

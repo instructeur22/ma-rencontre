@@ -58,8 +58,8 @@ export function inspectMessageForScamSignals(text) {
   return { flagged: false, severity: 'none', reason: '' };
 }
 
-export function computeTrustScore(db, userId) {
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+export async function computeTrustScore(db, userId) {
+  const user = await db.get('SELECT * FROM users WHERE id = ?', userId);
   if (!user) return 50;
 
   let score = 40;
@@ -73,14 +73,15 @@ export function computeTrustScore(db, userId) {
     score += 10;
   }
 
-  const reports = db
-    .prepare("SELECT COUNT(DISTINCT reporter_id) as cnt FROM blocks_reports WHERE target_id = ? AND action_type = 'report'")
-    .get(userId);
+  const reports = await db.get(
+    "SELECT COUNT(DISTINCT reporter_id) as cnt FROM blocks_reports WHERE target_id = ? AND action_type = 'report'",
+    userId
+  );
   const reportCount = reports ? Number(reports.cnt) : 0;
   score -= reportCount * 15;
 
   const clamped = Math.max(10, Math.min(100, score));
-  db.prepare('UPDATE users SET trust_score = ? WHERE id = ?').run(clamped, userId);
+  await db.run('UPDATE users SET trust_score = ? WHERE id = ?', clamped, userId);
   return clamped;
 }
 
@@ -89,17 +90,22 @@ export function getDailyChallenge() {
   return SELFIE_CHALLENGES[idx];
 }
 
-export function submitSelfieVerification(db, userId, challengeCode, selfieSnapshot) {
+export async function submitSelfieVerification(db, userId, challengeCode, selfieSnapshot) {
   const challenge = SELFIE_CHALLENGES.find((c) => c.code === challengeCode) || SELFIE_CHALLENGES[0];
   const id = `ver_${crypto.randomUUID().slice(0, 12)}`;
 
-  db.prepare(
+  await db.run(
     `INSERT INTO safety_verifications (id, user_id, challenge_code, challenge_label, status, selfie_snapshot)
-     VALUES (?, ?, ?, ?, 'verified', ?)`
-  ).run(id, userId, challenge.code, challenge.label, selfieSnapshot || 'live_gesture_verified');
+     VALUES (?, ?, ?, ?, 'verified', ?)`,
+    id,
+    userId,
+    challenge.code,
+    challenge.label,
+    selfieSnapshot || 'live_gesture_verified'
+  );
 
-  db.prepare('UPDATE users SET verified_225 = 1 WHERE id = ?').run(userId);
-  const newScore = computeTrustScore(db, userId);
+  await db.run('UPDATE users SET verified_225 = 1 WHERE id = ?', userId);
+  const newScore = await computeTrustScore(db, userId);
 
   return {
     verificationId: id,
@@ -110,13 +116,13 @@ export function submitSelfieVerification(db, userId, challengeCode, selfieSnapsh
   };
 }
 
-export function getBlockedUserIds(db, userId) {
-  const rows = db
-    .prepare(
-      `SELECT target_id AS blocked_id FROM blocks_reports WHERE reporter_id = ? AND action_type = 'block'
-       UNION
-       SELECT reporter_id AS blocked_id FROM blocks_reports WHERE target_id = ? AND action_type = 'block'`
-    )
-    .all(userId, userId);
+export async function getBlockedUserIds(db, userId) {
+  const rows = await db.all(
+    `SELECT target_id AS blocked_id FROM blocks_reports WHERE reporter_id = ? AND action_type = 'block'
+     UNION
+     SELECT reporter_id AS blocked_id FROM blocks_reports WHERE target_id = ? AND action_type = 'block'`,
+    userId,
+    userId
+  );
   return new Set(rows.map((r) => r.blocked_id));
 }

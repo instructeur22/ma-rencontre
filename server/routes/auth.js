@@ -5,12 +5,14 @@ import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { config } from '../config.js';
 import { getDb, normalizeRows, runInTransaction } from '../db/database.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requireAuth, signAuthToken } from '../middleware/auth.js';
 import { creditCauris, getEffectiveSubscriptionTier } from '../services/monetizationService.js';
 import { computeTrustScore } from '../services/antiScamService.js';
 import { normalizePhoneE164, requestWhatsAppOtp, verifyWhatsAppOtp } from '../services/whatsappOtpService.js';
 import { confirmPasswordReset, requestPasswordReset } from '../services/passwordResetService.js';
 import { getPrivateVerificationsDir } from '../services/selfieVerificationService.js';
+import { deleteUserMediaFiles } from '../services/mediaStorageService.js';
 import { disconnectUserSockets, issueWsTicket } from '../ws/realtime.js';
 import {
   ABIDJAN_COMMUNES,
@@ -68,7 +70,7 @@ export function formatSelfUser(row) {
   };
 }
 
-router.post('/register', (req, res) => {
+router.post('/register', asyncHandler(async (req, res) => {
   const {
     email,
     password,
@@ -153,7 +155,7 @@ router.post('/register', (req, res) => {
   }
 
   const db = getDb();
-  const existing = db.prepare('SELECT id FROM users WHERE lower(email) = lower(?)').get(cleanEmail);
+  const existing = await db.get('SELECT id FROM users WHERE lower(email) = lower(?)', cleanEmail);
   if (existing) {
     return res.status(409).json({
       success: false,
@@ -169,13 +171,12 @@ router.post('/register', (req, res) => {
 
   const termsAcceptedAt = acceptedTerms === true ? new Date().toISOString() : '';
 
-  db.prepare(
+  await db.run(
     `INSERT INTO users (
       id, email, phone, password_hash, name, age, gender, looking_for,
       commune, city, country_code, is_diaspora, intention, bio, avatar_url,
       cauris_balance, referral_code, trust_score, terms_accepted_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 50, ?)`
-  ).run(
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 50, ?)`,
     id,
     cleanEmail,
     normalizedPhone,
@@ -195,19 +196,19 @@ router.post('/register', (req, res) => {
     termsAcceptedAt
   );
 
-  creditCauris(db, id, 50, 'Bonus de bienvenue AKWABA', 'WELCOME-50');
+  await creditCauris(db, id, 50, 'Bonus de bienvenue AKWABA', 'WELCOME-50');
 
   if (referralCodeUsed && String(referralCodeUsed).trim()) {
-    const sponsor = db.prepare('SELECT id FROM users WHERE referral_code = ?').get(String(referralCodeUsed).trim().toUpperCase());
+    const sponsor = await db.get('SELECT id FROM users WHERE referral_code = ?', String(referralCodeUsed).trim().toUpperCase());
     if (sponsor && sponsor.id !== id) {
-      db.prepare('UPDATE users SET referred_by = ? WHERE id = ?').run(sponsor.id, id);
-      creditCauris(db, sponsor.id, 100, `Parrainage de ${cleanName}`, `REF-${id}`);
-      creditCauris(db, id, 50, 'Bonus code parrain', `REF-BONUS-${sponsor.id}`);
+      await db.run('UPDATE users SET referred_by = ? WHERE id = ?', sponsor.id, id);
+      await creditCauris(db, sponsor.id, 100, `Parrainage de ${cleanName}`, `REF-${id}`);
+      await creditCauris(db, id, 50, 'Bonus code parrain', `REF-BONUS-${sponsor.id}`);
     }
   }
 
-  computeTrustScore(db, id);
-  const created = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  await computeTrustScore(db, id);
+  const created = await db.get('SELECT * FROM users WHERE id = ?', id);
   const token = signAuthToken(id);
 
   return res.status(201).json({
@@ -217,9 +218,9 @@ router.post('/register', (req, res) => {
       user: formatSelfUser(created),
     },
   });
-});
+}));
 
-router.post('/login', (req, res) => {
+router.post('/login', asyncHandler(async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) {
     return res.status(422).json({
@@ -229,7 +230,7 @@ router.post('/login', (req, res) => {
   }
 
   const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)').get(String(email).trim());
+  const user = await db.get('SELECT * FROM users WHERE lower(email) = lower(?)', String(email).trim());
   if (!user || !bcrypt.compareSync(String(password), user.password_hash)) {
     return res.status(401).json({
       success: false,
@@ -245,9 +246,9 @@ router.post('/login', (req, res) => {
       user: formatSelfUser(user),
     },
   });
-});
+}));
 
-router.post('/demo', (req, res) => {
+router.post('/demo', asyncHandler(async (req, res) => {
   if (!config.allowDemoLogin) {
     return res.status(403).json({
       success: false,
@@ -257,7 +258,7 @@ router.post('/demo', (req, res) => {
   const { persona = 'kouame' } = req.body || {};
   const targetId = persona === 'aya' ? 'usr_aya' : 'usr_kouame';
   const db = getDb();
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(targetId);
+  const user = await db.get('SELECT * FROM users WHERE id = ?', targetId);
   if (!user) {
     return res.status(404).json({ success: false, error: { code: 'DEMO_NOT_SEEDED', message: 'Profil démo introuvable.' } });
   }
@@ -269,7 +270,7 @@ router.post('/demo', (req, res) => {
       user: formatSelfUser(user),
     },
   });
-});
+}));
 
 router.get('/me', requireAuth, (req, res) => {
   return res.json({
@@ -311,10 +312,10 @@ router.post('/phone-otp/request', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/phone-otp/verify', requireAuth, (req, res) => {
+router.post('/phone-otp/verify', requireAuth, asyncHandler(async (req, res) => {
   const { phone, code } = req.body || {};
   const db = getDb();
-  const result = verifyWhatsAppOtp(db, req.user.id, phone, code);
+  const result = await verifyWhatsAppOtp(db, req.user.id, phone, code);
   if (!result.ok) {
     return res.status(result.status).json({
       success: false,
@@ -325,7 +326,7 @@ router.post('/phone-otp/verify', requireAuth, (req, res) => {
       },
     });
   }
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  const updated = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
   return res.json({
     success: true,
     data: {
@@ -333,20 +334,20 @@ router.post('/phone-otp/verify', requireAuth, (req, res) => {
       user: formatSelfUser(updated),
     },
   });
-});
+}));
 
 // Hardened legacy route: now requires a valid 6-digit WhatsApp OTP code
-router.post('/phone-verify', requireAuth, (req, res) => {
+router.post('/phone-verify', requireAuth, asyncHandler(async (req, res) => {
   const { phone, code } = req.body || {};
   const db = getDb();
-  const result = verifyWhatsAppOtp(db, req.user.id, phone, code);
+  const result = await verifyWhatsAppOtp(db, req.user.id, phone, code);
   if (!result.ok) {
     return res.status(result.status).json({
       success: false,
       error: { code: result.code, message: result.message },
     });
   }
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  const updated = await db.get('SELECT * FROM users WHERE id = ?', req.user.id);
   return res.json({
     success: true,
     data: {
@@ -354,7 +355,7 @@ router.post('/phone-verify', requireAuth, (req, res) => {
       user: formatSelfUser(updated),
     },
   });
-});
+}));
 
 function resolveDiskPathFromUploadUrl(uploadUrl) {
   if (!uploadUrl || typeof uploadUrl !== 'string' || !uploadUrl.startsWith('/uploads/') || uploadUrl.includes('..')) {
@@ -370,8 +371,8 @@ function resolveDiskPathFromUploadUrl(uploadUrl) {
 /**
  * Permanently delete a user account and all associated files on disk (ARTCI / GDPR / moderation ban).
  */
-export function purgeUserAccount(db, userId) {
-  const user = db.prepare('SELECT id, avatar_url, voice_note_url FROM users WHERE id = ?').get(userId);
+export async function purgeUserAccount(db, userId) {
+  const user = await db.get('SELECT id, avatar_url, voice_note_url FROM users WHERE id = ?', userId);
   if (!user) return { deleted: false };
 
   const filesToDelete = [];
@@ -381,7 +382,7 @@ export function purgeUserAccount(db, userId) {
   }
 
   const sentVoices = normalizeRows(
-    db.prepare("SELECT media_url FROM messages WHERE sender_id = ? AND media_url LIKE '/uploads/%'").all(userId)
+    await db.all("SELECT media_url FROM messages WHERE sender_id = ? AND media_url LIKE '/uploads/%'", userId)
   );
   for (const row of sentVoices) {
     const p = resolveDiskPathFromUploadUrl(row.media_url);
@@ -389,7 +390,7 @@ export function purgeUserAccount(db, userId) {
   }
 
   const verifs = normalizeRows(
-    db.prepare('SELECT image_path FROM safety_verifications WHERE user_id = ?').all(userId)
+    await db.all('SELECT image_path FROM safety_verifications WHERE user_id = ?', userId)
   );
   const privBase = path.resolve(getPrivateVerificationsDir());
   for (const row of verifs) {
@@ -399,8 +400,9 @@ export function purgeUserAccount(db, userId) {
     }
   }
 
-  runInTransaction(db, () => {
-    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+  await runInTransaction(db, async (tx) => {
+    await deleteUserMediaFiles(tx, userId);
+    await tx.run('DELETE FROM users WHERE id = ?', userId);
   });
 
   disconnectUserSockets(userId);
@@ -451,10 +453,10 @@ router.post('/password-reset/request', async (req, res) => {
   }
 });
 
-router.post('/password-reset/confirm', (req, res) => {
+router.post('/password-reset/confirm', asyncHandler(async (req, res) => {
   const { identifier, code, newPassword } = req.body || {};
   const db = getDb();
-  const result = confirmPasswordReset(db, { identifier, code, newPassword });
+  const result = await confirmPasswordReset(db, { identifier, code, newPassword });
   if (!result.ok) {
     return res.status(result.status).json({
       success: false,
@@ -462,9 +464,9 @@ router.post('/password-reset/confirm', (req, res) => {
     });
   }
   return res.json({ success: true, data: result.data });
-});
+}));
 
-router.post('/change-password', requireAuth, (req, res) => {
+router.post('/change-password', requireAuth, asyncHandler(async (req, res) => {
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword || String(newPassword).length < 8) {
     return res.status(422).json({
@@ -473,7 +475,7 @@ router.post('/change-password', requireAuth, (req, res) => {
     });
   }
   const db = getDb();
-  const user = db.prepare('SELECT id, password_hash FROM users WHERE id = ?').get(req.user.id);
+  const user = await db.get('SELECT id, password_hash FROM users WHERE id = ?', req.user.id);
   if (!user || !bcrypt.compareSync(String(currentPassword), user.password_hash)) {
     return res.status(401).json({
       success: false,
@@ -481,11 +483,11 @@ router.post('/change-password', requireAuth, (req, res) => {
     });
   }
   const nextHash = bcrypt.hashSync(String(newPassword), 10);
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(nextHash, req.user.id);
+  await db.run('UPDATE users SET password_hash = ? WHERE id = ?', nextHash, req.user.id);
   return res.json({ success: true, data: { updated: true, message: 'Mot de passe modifié.' } });
-});
+}));
 
-router.delete('/me', requireAuth, (req, res) => {
+router.delete('/me', requireAuth, asyncHandler(async (req, res) => {
   const { password } = req.body || {};
   if (!password) {
     return res.status(422).json({
@@ -494,15 +496,15 @@ router.delete('/me', requireAuth, (req, res) => {
     });
   }
   const db = getDb();
-  const user = db.prepare('SELECT id, password_hash FROM users WHERE id = ?').get(req.user.id);
+  const user = await db.get('SELECT id, password_hash FROM users WHERE id = ?', req.user.id);
   if (!user || !bcrypt.compareSync(String(password), user.password_hash)) {
     return res.status(401).json({
       success: false,
       error: { code: 'INVALID_PASSWORD', message: 'Mot de passe incorrect.' },
     });
   }
-  const result = purgeUserAccount(db, req.user.id);
+  const result = await purgeUserAccount(db, req.user.id);
   return res.json({ success: true, data: result });
-});
+}));
 
 export default router;

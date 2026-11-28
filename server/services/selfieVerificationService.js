@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
-import { normalizeRows } from '../db/database.js';
 import { SELFIE_CHALLENGES, computeTrustScore } from './antiScamService.js';
 import { parseJsonSafe } from './matchingService.js';
+import { getMediaFile, saveMediaFile } from './mediaStorageService.js';
 import { emitToUser } from '../ws/realtime.js';
 
 const MAX_SELFIE_BYTES = 3 * 1024 * 1024;
@@ -73,10 +73,17 @@ export function validateSelfieImageBase64(rawInput) {
   return { ok: true, buffer, ext, mimeType: MIME_BY_EXT[ext] };
 }
 
-function readLocalProfilePhoto(avatarUrl) {
+async function readLocalProfilePhoto(db, avatarUrl) {
   if (!avatarUrl || typeof avatarUrl !== 'string') return null;
   const trimmed = avatarUrl.trim();
   if (trimmed.includes('..')) return null;
+
+  if (trimmed.startsWith('/uploads/')) {
+    const inDb = await getMediaFile(db, trimmed, 'public');
+    if (inDb && inDb.buffer.byteLength <= MAX_SELFIE_BYTES && inDb.buffer.byteLength >= MIN_SELFIE_BYTES) {
+      return inDb;
+    }
+  }
 
   let fullPath = null;
   if (trimmed.startsWith('/uploads/')) {
@@ -219,14 +226,18 @@ export async function processSelfieSubmission(db, userRow, { challengeCode, imag
 
   const challenge = SELFIE_CHALLENGES.find((c) => c.code === challengeCode) || SELFIE_CHALLENGES[0];
   const verId = `ver_${crypto.randomUUID().slice(0, 12)}`;
-  const privateDir = getPrivateVerificationsDir();
-  fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
-
   const filename = `${verId}.${validated.ext}`;
-  const fullPath = path.join(privateDir, filename);
-  fs.writeFileSync(fullPath, validated.buffer, { mode: 0o600 });
+  const mediaPath = `private_verifications/${filename}`;
 
-  const profilePhoto = readLocalProfilePhoto(userRow.avatar_url);
+  await saveMediaFile(db, {
+    mediaPath,
+    userId: userRow.id,
+    mimeType: validated.mimeType,
+    buffer: validated.buffer,
+    visibility: 'private',
+  });
+
+  const profilePhoto = await readLocalProfilePhoto(db, userRow.avatar_url);
   const ai = await analyzeSelfieWithGemini({
     selfieBuffer: validated.buffer,
     selfieMime: validated.mimeType,
@@ -235,12 +246,11 @@ export async function processSelfieSubmission(db, userRow, { challengeCode, imag
   });
 
   const reviewedAt = ai.outcome === 'verified' || ai.outcome === 'rejected' ? new Date().toISOString() : null;
-  db.prepare(
+  await db.run(
     `INSERT INTO safety_verifications (
       id, user_id, challenge_code, challenge_label, status, selfie_snapshot,
       image_path, ai_provider, ai_confidence, ai_reason, ai_details_json, reviewed_at
-    ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`
-  ).run(
+    ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
     verId,
     userRow.id,
     challenge.code,
@@ -255,11 +265,11 @@ export async function processSelfieSubmission(db, userRow, { challengeCode, imag
   );
 
   if (ai.outcome === 'verified') {
-    db.prepare('UPDATE users SET verified_225 = 1 WHERE id = ?').run(userRow.id);
+    await db.run('UPDATE users SET verified_225 = 1 WHERE id = ?', userRow.id);
   }
 
-  const newScore = computeTrustScore(db, userRow.id);
-  const refreshedUser = db.prepare('SELECT * FROM users WHERE id = ?').get(userRow.id);
+  const newScore = await computeTrustScore(db, userRow.id);
+  const refreshedUser = await db.get('SELECT * FROM users WHERE id = ?', userRow.id);
 
   return {
     ok: true,
@@ -277,15 +287,14 @@ export async function processSelfieSubmission(db, userRow, { challengeCode, imag
   };
 }
 
-export function getLatestUserVerification(db, userId) {
-  const row = db
-    .prepare(
-      `SELECT id, challenge_code, challenge_label, status, ai_provider, ai_confidence, ai_reason, reviewer_note, reviewed_at, created_at
-       FROM safety_verifications
-       WHERE user_id = ?
-       ORDER BY rowid DESC LIMIT 1`
-    )
-    .get(userId);
+export async function getLatestUserVerification(db, userId) {
+  const row = await db.get(
+    `SELECT id, challenge_code, challenge_label, status, ai_provider, ai_confidence, ai_reason, reviewer_note, reviewed_at, created_at
+     FROM safety_verifications
+     WHERE user_id = ?
+     ORDER BY created_at DESC, id DESC LIMIT 1`,
+    userId
+  );
   if (!row) return null;
   return {
     id: row.id,
@@ -301,22 +310,26 @@ export function getLatestUserVerification(db, userId) {
   };
 }
 
-export function listVerificationQueue(db, statusFilter = 'pending_review') {
+export async function listVerificationQueue(db, statusFilter = 'pending_review') {
   const allowed = ['pending_review', 'verified', 'rejected', 'all'];
   const safeStatus = allowed.includes(statusFilter) ? statusFilter : 'pending_review';
-  const query =
+  const rows =
     safeStatus === 'all'
-      ? `SELECT v.*, u.name AS user_name, u.age AS user_age, u.commune AS user_commune, u.avatar_url AS user_avatar_url
-         FROM safety_verifications v
-         JOIN users u ON u.id = v.user_id
-         ORDER BY v.rowid DESC LIMIT 50`
-      : `SELECT v.*, u.name AS user_name, u.age AS user_age, u.commune AS user_commune, u.avatar_url AS user_avatar_url
-         FROM safety_verifications v
-         JOIN users u ON u.id = v.user_id
-         WHERE v.status = ?
-         ORDER BY v.rowid DESC LIMIT 50`;
+      ? await db.all(
+          `SELECT v.*, u.name AS user_name, u.age AS user_age, u.commune AS user_commune, u.avatar_url AS user_avatar_url
+           FROM safety_verifications v
+           JOIN users u ON u.id = v.user_id
+           ORDER BY v.created_at DESC, v.id DESC LIMIT 50`
+        )
+      : await db.all(
+          `SELECT v.*, u.name AS user_name, u.age AS user_age, u.commune AS user_commune, u.avatar_url AS user_avatar_url
+           FROM safety_verifications v
+           JOIN users u ON u.id = v.user_id
+           WHERE v.status = ?
+           ORDER BY v.created_at DESC, v.id DESC LIMIT 50`,
+          safeStatus
+        );
 
-  const rows = normalizeRows(safeStatus === 'all' ? db.prepare(query).all() : db.prepare(query).all(safeStatus));
   return rows.map((r) => ({
     id: r.id,
     userId: r.user_id,
@@ -337,18 +350,14 @@ export function listVerificationQueue(db, statusFilter = 'pending_review') {
   }));
 }
 
-export function resolvePrivateSelfieFile(db, verificationId) {
-  const row = db.prepare('SELECT id, image_path FROM safety_verifications WHERE id = ?').get(verificationId);
+export async function resolvePrivateSelfieMedia(db, verificationId) {
+  const row = await db.get('SELECT id, image_path FROM safety_verifications WHERE id = ?', verificationId);
   if (!row || !row.image_path) return null;
   const filename = path.basename(row.image_path);
-  const baseDir = path.resolve(getPrivateVerificationsDir());
-  const fullPath = path.resolve(baseDir, filename);
-  if (!fullPath.startsWith(baseDir + path.sep) || !fs.existsSync(fullPath)) return null;
-  const ext = path.extname(filename).replace('.', '').toLowerCase();
-  return { fullPath, mimeType: MIME_BY_EXT[ext] || 'image/jpeg' };
+  return getMediaFile(db, `private_verifications/${filename}`, 'private');
 }
 
-export function reviewVerification(db, verificationId, { decision, note = '' }) {
+export async function reviewVerification(db, verificationId, { decision, note = '' }) {
   if (!['verified', 'rejected'].includes(decision)) {
     return {
       ok: false,
@@ -358,30 +367,35 @@ export function reviewVerification(db, verificationId, { decision, note = '' }) 
     };
   }
 
-  const row = db.prepare('SELECT * FROM safety_verifications WHERE id = ?').get(verificationId);
+  const row = await db.get('SELECT * FROM safety_verifications WHERE id = ?', verificationId);
   if (!row) {
     return { ok: false, status: 404, code: 'VERIFICATION_NOT_FOUND', message: 'Demande introuvable.' };
   }
 
   const cleanNote = String(note || '').trim().slice(0, 280);
   const nowIso = new Date().toISOString();
-  db.prepare(
-    `UPDATE safety_verifications SET status = ?, reviewer_note = ?, reviewed_at = ? WHERE id = ?`
-  ).run(decision, cleanNote, nowIso, verificationId);
+  await db.run(
+    'UPDATE safety_verifications SET status = ?, reviewer_note = ?, reviewed_at = ? WHERE id = ?',
+    decision,
+    cleanNote,
+    nowIso,
+    verificationId
+  );
 
   if (decision === 'verified') {
-    db.prepare('UPDATE users SET verified_225 = 1 WHERE id = ?').run(row.user_id);
+    await db.run('UPDATE users SET verified_225 = 1 WHERE id = ?', row.user_id);
   } else {
-    const anyVerified = db
-      .prepare("SELECT 1 FROM safety_verifications WHERE user_id = ? AND status = 'verified' LIMIT 1")
-      .get(row.user_id);
+    const anyVerified = await db.get(
+      "SELECT 1 FROM safety_verifications WHERE user_id = ? AND status = 'verified' LIMIT 1",
+      row.user_id
+    );
     if (!anyVerified) {
-      db.prepare('UPDATE users SET verified_225 = 0 WHERE id = ?').run(row.user_id);
+      await db.run('UPDATE users SET verified_225 = 0 WHERE id = ?', row.user_id);
     }
   }
 
-  const trustScore = computeTrustScore(db, row.user_id);
-  const updatedUser = db.prepare('SELECT verified_225 FROM users WHERE id = ?').get(row.user_id);
+  const trustScore = await computeTrustScore(db, row.user_id);
+  const updatedUser = await db.get('SELECT verified_225 FROM users WHERE id = ?', row.user_id);
   const verified225 = Boolean(updatedUser?.verified_225);
 
   emitToUser(row.user_id, {

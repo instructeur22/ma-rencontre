@@ -2,38 +2,38 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { getDb, normalizeRows, runInTransaction } from '../db/database.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requireAuth } from '../middleware/auth.js';
 import { createGeniusPayPayment } from '../services/geniusPayService.js';
 
 const router = express.Router();
 
-router.get('/spots', requireAuth, (req, res) => {
+router.get('/spots', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const { commune = 'all' } = req.query;
-  let spots = normalizeRows(db.prepare('SELECT * FROM safe_date_spots').all());
+  let spots = normalizeRows(await db.all('SELECT * FROM safe_date_spots'));
   if (commune !== 'all') {
     spots = spots.filter((s) => s.commune.toLowerCase().includes(String(commune).toLowerCase()));
   }
   const myBookings = normalizeRows(
-    db
-      .prepare(
-        `SELECT b.*, s.name AS spot_name, s.commune AS spot_commune
-         FROM date_bookings b
-         JOIN safe_date_spots s ON s.id = b.spot_id
-         WHERE b.user_id = ?
-         ORDER BY b.created_at DESC`
-      )
-      .all(req.user.id)
+    await db.all(
+      `SELECT b.*, s.name AS spot_name, s.commune AS spot_commune
+       FROM date_bookings b
+       JOIN safe_date_spots s ON s.id = b.spot_id
+       WHERE b.user_id = ?
+       ORDER BY b.created_at DESC`,
+      req.user.id
+    )
   );
 
   return res.json({
     success: true,
     data: { spots, myBookings },
   });
-});
+}));
 
 router.post('/bookings', requireAuth, async (req, res) => {
-  if (config.nodeEnv === 'production' && config.geniusPay.useLocalSimulator) {
+  if (!config.allowSandboxSimulators && config.geniusPay.useLocalSimulator) {
     return res.status(503).json({
       success: false,
       error: {
@@ -45,7 +45,7 @@ router.post('/bookings', requireAuth, async (req, res) => {
   try {
     const { spotId, bookingDate = 'Ce week-end', guestsCount = 2, paymentMethod = 'wave', customerPhone = '' } = req.body || {};
     const db = getDb();
-    const spot = db.prepare('SELECT * FROM safe_date_spots WHERE id = ?').get(spotId);
+    const spot = await db.get('SELECT * FROM safe_date_spots WHERE id = ?', spotId);
     if (!spot) {
       return res.status(404).json({ success: false, error: { code: 'SPOT_NOT_FOUND', message: 'Lieu Safe Date introuvable.' } });
     }
@@ -80,19 +80,19 @@ router.post('/bookings', requireAuth, async (req, res) => {
       metadata,
     });
 
-    runInTransaction(db, () => {
-      db.prepare(
+    await runInTransaction(db, async (tx) => {
+      await tx.run(
         `INSERT INTO date_bookings (id, spot_id, user_id, booking_date, guests_count, total_xof, payment_reference, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`
-      ).run(bookingId, spot.id, req.user.id, String(bookingDate).slice(0, 80), guests, totalXof, gp.reference);
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        bookingId, spot.id, req.user.id, String(bookingDate).slice(0, 80), guests, totalXof, gp.reference
+      );
 
-      db.prepare(
+      await tx.run(
         `INSERT INTO payment_orders (
           id, reference, user_id, provider, payment_method, item_code, item_type,
           amount_xof, fees_xof, net_amount_xof, currency, status, checkout_url,
           customer_phone, metadata_json, environment
-        ) VALUES (?, ?, ?, 'geniuspay', ?, ?, 'event_ticket', ?, ?, ?, 'XOF', 'pending', ?, ?, ?, ?)`
-      ).run(
+        ) VALUES (?, ?, ?, 'geniuspay', ?, ?, 'event_ticket', ?, ?, ?, 'XOF', 'pending', ?, ?, ?, ?)`,
         orderId,
         gp.reference,
         req.user.id,

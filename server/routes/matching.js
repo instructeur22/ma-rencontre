@@ -1,7 +1,8 @@
 import express from 'express';
 import crypto from 'node:crypto';
-import { getDb, normalizeRows } from '../db/database.js';
+import { getDb } from '../db/database.js';
 import { requireAuth } from '../middleware/auth.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import { computeCompatibility, sanitizePublicProfile } from '../services/matchingService.js';
 import { getBlockedUserIds, inspectMessageForScamSignals } from '../services/antiScamService.js';
 import { getEffectiveSubscriptionTier, spendCauris } from '../services/monetizationService.js';
@@ -9,21 +10,26 @@ import { emitToUser } from '../ws/realtime.js';
 
 const router = express.Router();
 
-export function createMatchPair(db, userOneId, userTwoId, compatibilityScore, isSuperMatch = 0) {
+export async function createMatchPair(db, userOneId, userTwoId, compatibilityScore, isSuperMatch = 0) {
   const [userA, userB] = [userOneId, userTwoId].sort();
-  const existing = db.prepare('SELECT * FROM matches WHERE user_a = ? AND user_b = ?').get(userA, userB);
+  const existing = await db.get('SELECT * FROM matches WHERE user_a = ? AND user_b = ?', userA, userB);
   if (existing) return { ...existing, created: false };
 
   const matchId = `match_${crypto.randomUUID().slice(0, 12)}`;
-  db.prepare(
+  await db.run(
     `INSERT INTO matches (id, user_a, user_b, compatibility_score, is_super_match)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(matchId, userA, userB, compatibilityScore, isSuperMatch ? 1 : 0);
+     VALUES (?, ?, ?, ?, ?)`,
+    matchId,
+    userA,
+    userB,
+    compatibilityScore,
+    isSuperMatch ? 1 : 0
+  );
 
   return { id: matchId, user_a: userA, user_b: userB, compatibility_score: compatibilityScore, is_super_match: isSuperMatch ? 1 : 0, created: true };
 }
 
-router.post('/swipes', requireAuth, (req, res) => {
+router.post('/swipes', requireAuth, asyncHandler(async (req, res) => {
   const { targetId, action, reactionNote } = req.body || {};
   if (!targetId || !['pass', 'like', 'super_like'].includes(action)) {
     return res.status(422).json({
@@ -42,7 +48,7 @@ router.post('/swipes', requireAuth, (req, res) => {
     });
   }
 
-  const blocked = getBlockedUserIds(db, actor.id);
+  const blocked = await getBlockedUserIds(db, actor.id);
   if (blocked.has(targetId)) {
     return res.status(403).json({
       success: false,
@@ -50,14 +56,14 @@ router.post('/swipes', requireAuth, (req, res) => {
     });
   }
 
-  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(targetId);
+  const target = await db.get('SELECT * FROM users WHERE id = ?', targetId);
   if (!target) {
     return res.status(404).json({ success: false, error: { code: 'TARGET_NOT_FOUND', message: 'Profil cible introuvable.' } });
   }
 
   const actorTier = getEffectiveSubscriptionTier(actor);
   if (action === 'super_like' && !['babi_gold', 'diaspora_vip', 'djo_3d'].includes(actorTier)) {
-    const debit = spendCauris(db, actor.id, 60, `Super Coup de Cœur pour ${target.name}`, `SUPER-${target.id}`);
+    const debit = await spendCauris(db, actor.id, 60, `Super Coup de Cœur pour ${target.name}`, `SUPER-${target.id}`);
     if (!debit.ok) {
       return res.status(402).json({
         success: false,
@@ -66,39 +72,46 @@ router.post('/swipes', requireAuth, (req, res) => {
     }
   }
 
-  db.prepare(
-    `INSERT INTO swipes (actor_id, target_id, action) VALUES (?, ?, ?)
-     ON CONFLICT(actor_id, target_id) DO UPDATE SET action = excluded.action, created_at = CURRENT_TIMESTAMP`
-  ).run(actor.id, target.id, action);
+  await db.run(
+    `INSERT INTO swipes (actor_id, target_id, action, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(actor_id, target_id) DO UPDATE SET action = excluded.action, created_at = excluded.created_at`,
+    actor.id,
+    target.id,
+    action,
+    new Date().toISOString()
+  );
 
   let isMatch = false;
   let matchObj = null;
 
   if (action === 'like' || action === 'super_like') {
-    const reciprocal = db
-      .prepare("SELECT * FROM swipes WHERE actor_id = ? AND target_id = ? AND action IN ('like', 'super_like')")
-      .get(target.id, actor.id);
+    const reciprocal = await db.get(
+      "SELECT * FROM swipes WHERE actor_id = ? AND target_id = ? AND action IN ('like', 'super_like')",
+      target.id,
+      actor.id
+    );
 
-    // Demo bots with high affinity or Verified 225 reciprocate realistically when super-liked or >= 76% compatibility
     const compat = computeCompatibility(actor, target);
     const shouldAutoMatch = Boolean(reciprocal) || (target.is_demo_bot && (action === 'super_like' || compat.score >= 76));
 
     if (shouldAutoMatch) {
       if (!reciprocal && target.is_demo_bot) {
-        db.prepare(
-          `INSERT OR IGNORE INTO swipes (actor_id, target_id, action) VALUES (?, ?, 'like')`
-        ).run(target.id, actor.id);
+        await db.run(
+          `INSERT INTO swipes (actor_id, target_id, action) VALUES (?, ?, 'like')
+           ON CONFLICT (actor_id, target_id) DO NOTHING`,
+          target.id,
+          actor.id
+        );
       }
       isMatch = true;
-      matchObj = createMatchPair(db, actor.id, target.id, compat.score, action === 'super_like' || reciprocal?.action === 'super_like');
+      matchObj = await createMatchPair(db, actor.id, target.id, compat.score, action === 'super_like' || reciprocal?.action === 'super_like');
 
       if (cleanReaction) {
         const scamCheck = inspectMessageForScamSignals(cleanReaction);
         const reactionMsgId = `msg_${crypto.randomUUID().slice(0, 12)}`;
-        db.prepare(
+        await db.run(
           `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content, scam_flagged, scam_reason)
-           VALUES (?, ?, ?, ?, 'text', ?, ?, ?)`
-        ).run(
+           VALUES (?, ?, ?, ?, 'text', ?, ?, ?)`,
           reactionMsgId,
           matchObj.id,
           actor.id,
@@ -107,7 +120,7 @@ router.post('/swipes', requireAuth, (req, res) => {
           scamCheck.flagged ? 1 : 0,
           scamCheck.reason
         );
-        const savedReaction = { ...db.prepare('SELECT * FROM messages WHERE id = ?').get(reactionMsgId) };
+        const savedReaction = await db.get('SELECT * FROM messages WHERE id = ?', reactionMsgId);
         emitToUser(target.id, { type: 'message', matchId: matchObj.id, message: savedReaction });
       }
 
@@ -116,10 +129,15 @@ router.post('/swipes', requireAuth, (req, res) => {
         const greeting = cleanReaction
           ? `Akwaba ${actor.name} ! J’adore ta réaction sur mon profil (${compat.score}% d’alchimie). On continue d’en parler ici ?`
           : `Akwaba ${actor.name} ! Ravi(e) de matcher avec toi (${compat.score}% d'alchimie). ${compat.reasons[0] || ''}`;
-        db.prepare(
+        await db.run(
           `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content)
-           VALUES (?, ?, ?, ?, 'text', ?)`
-        ).run(msgId, matchObj.id, target.id, actor.id, greeting);
+           VALUES (?, ?, ?, ?, 'text', ?)`,
+          msgId,
+          matchObj.id,
+          target.id,
+          actor.id,
+          greeting
+        );
       }
 
       emitToUser(target.id, {
@@ -135,7 +153,7 @@ router.post('/swipes', requireAuth, (req, res) => {
     }
   }
 
-  const updatedActor = db.prepare('SELECT cauris_balance FROM users WHERE id = ?').get(actor.id);
+  const updatedActor = await db.get('SELECT cauris_balance FROM users WHERE id = ?', actor.id);
   return res.json({
     success: true,
     data: {
@@ -145,14 +163,15 @@ router.post('/swipes', requireAuth, (req, res) => {
       caurisBalance: Number(updatedActor.cauris_balance),
     },
   });
-});
+}));
 
-router.post('/swipes/rewind', requireAuth, (req, res) => {
+router.post('/swipes/rewind', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const actor = req.user;
-  const lastPass = db
-    .prepare("SELECT * FROM swipes WHERE actor_id = ? AND action = 'pass' ORDER BY id DESC LIMIT 1")
-    .get(actor.id);
+  const lastPass = await db.get(
+    "SELECT * FROM swipes WHERE actor_id = ? AND action = 'pass' ORDER BY id DESC LIMIT 1",
+    actor.id
+  );
 
   if (!lastPass) {
     return res.status(404).json({
@@ -162,7 +181,7 @@ router.post('/swipes/rewind', requireAuth, (req, res) => {
   }
 
   if (getEffectiveSubscriptionTier(actor) === 'free') {
-    const debit = spendCauris(db, actor.id, 60, 'Retour arrière sur un profil passé', 'REWIND');
+    const debit = await spendCauris(db, actor.id, 60, 'Retour arrière sur un profil passé', 'REWIND');
     if (!debit.ok) {
       return res.status(402).json({
         success: false,
@@ -171,9 +190,9 @@ router.post('/swipes/rewind', requireAuth, (req, res) => {
     }
   }
 
-  db.prepare('DELETE FROM swipes WHERE id = ?').run(lastPass.id);
-  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(lastPass.target_id);
-  const updated = db.prepare('SELECT cauris_balance FROM users WHERE id = ?').get(actor.id);
+  await db.run('DELETE FROM swipes WHERE id = ?', lastPass.id);
+  const target = await db.get('SELECT * FROM users WHERE id = ?', lastPass.target_id);
+  const updated = await db.get('SELECT cauris_balance FROM users WHERE id = ?', actor.id);
 
   return res.json({
     success: true,
@@ -182,29 +201,34 @@ router.post('/swipes/rewind', requireAuth, (req, res) => {
       caurisBalance: Number(updated.cauris_balance),
     },
   });
-});
+}));
 
-router.get('/matches', requireAuth, (req, res) => {
+router.get('/matches', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const viewer = req.user;
-  const blocked = getBlockedUserIds(db, viewer.id);
-  const rows = normalizeRows(
-    db.prepare('SELECT * FROM matches WHERE user_a = ? OR user_b = ? ORDER BY created_at DESC').all(viewer.id, viewer.id)
+  const blocked = await getBlockedUserIds(db, viewer.id);
+  const rows = await db.all(
+    'SELECT * FROM matches WHERE user_a = ? OR user_b = ? ORDER BY created_at DESC',
+    viewer.id,
+    viewer.id
   );
 
   const list = [];
   for (const m of rows) {
     const partnerId = m.user_a === viewer.id ? m.user_b : m.user_a;
     if (blocked.has(partnerId)) continue;
-    const partner = db.prepare('SELECT * FROM users WHERE id = ?').get(partnerId);
+    const partner = await db.get('SELECT * FROM users WHERE id = ?', partnerId);
     if (!partner) continue;
 
-    const lastMsg = db
-      .prepare('SELECT * FROM messages WHERE match_id = ? ORDER BY created_at DESC LIMIT 1')
-      .get(m.id);
-    const unreadRow = db
-      .prepare('SELECT COUNT(*) as cnt FROM messages WHERE match_id = ? AND recipient_id = ? AND is_read = 0')
-      .get(m.id, viewer.id);
+    const lastMsg = await db.get(
+      'SELECT * FROM messages WHERE match_id = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+      m.id
+    );
+    const unreadRow = await db.get(
+      'SELECT COUNT(*) as cnt FROM messages WHERE match_id = ? AND recipient_id = ? AND is_read = 0',
+      m.id,
+      viewer.id
+    );
 
     list.push({
       id: m.id,
@@ -218,35 +242,31 @@ router.get('/matches', requireAuth, (req, res) => {
   }
 
   return res.json({ success: true, data: { matches: list } });
-});
+}));
 
-router.get('/likes/received', requireAuth, (req, res) => {
+router.get('/likes/received', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const viewer = req.user;
-  const blocked = getBlockedUserIds(db, viewer.id);
+  const blocked = await getBlockedUserIds(db, viewer.id);
   const isVip = ['babi_gold', 'diaspora_vip'].includes(getEffectiveSubscriptionTier(viewer));
 
-  const incoming = normalizeRows(
-    db
-      .prepare(
-        `SELECT s.*, u.id AS u_id
-         FROM swipes s
-         JOIN users u ON u.id = s.actor_id
-         WHERE s.target_id = ? AND s.action IN ('like', 'super_like')
-         ORDER BY s.created_at DESC`
-      )
-      .all(viewer.id)
+  const incoming = await db.all(
+    `SELECT s.*, u.id AS u_id
+     FROM swipes s
+     JOIN users u ON u.id = s.actor_id
+     WHERE s.target_id = ? AND s.action IN ('like', 'super_like')
+     ORDER BY s.created_at DESC`,
+    viewer.id
   );
 
   const admirers = [];
   for (const row of incoming) {
     if (blocked.has(row.actor_id)) continue;
-    // Skip if already matched
     const [a, b] = [viewer.id, row.actor_id].sort();
-    const matched = db.prepare('SELECT id FROM matches WHERE user_a = ? AND user_b = ?').get(a, b);
+    const matched = await db.get('SELECT id FROM matches WHERE user_a = ? AND user_b = ?', a, b);
     if (matched) continue;
 
-    const actor = db.prepare('SELECT * FROM users WHERE id = ?').get(row.actor_id);
+    const actor = await db.get('SELECT * FROM users WHERE id = ?', row.actor_id);
     if (!actor) continue;
 
     const unlocked = isVip || Boolean(row.revealed);
@@ -281,38 +301,41 @@ router.get('/likes/received', requireAuth, (req, res) => {
       revealCostCauris: 120,
     },
   });
-});
+}));
 
-router.post('/likes/:userId/reveal', requireAuth, (req, res) => {
+router.post('/likes/:userId/reveal', requireAuth, asyncHandler(async (req, res) => {
   const db = getDb();
   const viewer = req.user;
   const targetId = req.params.userId;
 
-  if (getBlockedUserIds(db, viewer.id).has(targetId)) {
+  const blocked = await getBlockedUserIds(db, viewer.id);
+  if (blocked.has(targetId)) {
     return res.status(404).json({ success: false, error: { code: 'LIKE_NOT_FOUND', message: 'Admirateur introuvable.' } });
   }
 
-  const swipe = db
-    .prepare("SELECT * FROM swipes WHERE actor_id = ? AND target_id = ? AND action IN ('like', 'super_like')")
-    .get(targetId, viewer.id);
+  const swipe = await db.get(
+    "SELECT * FROM swipes WHERE actor_id = ? AND target_id = ? AND action IN ('like', 'super_like')",
+    targetId,
+    viewer.id
+  );
 
   if (!swipe) {
     return res.status(404).json({ success: false, error: { code: 'LIKE_NOT_FOUND', message: 'Admirateur introuvable.' } });
   }
 
   if (!swipe.revealed && !['babi_gold', 'diaspora_vip'].includes(getEffectiveSubscriptionTier(viewer))) {
-    const debit = spendCauris(db, viewer.id, 120, 'Révélation d’un admirateur', `REVEAL-${targetId}`);
+    const debit = await spendCauris(db, viewer.id, 120, 'Révélation d’un admirateur', `REVEAL-${targetId}`);
     if (!debit.ok) {
       return res.status(402).json({
         success: false,
         error: { code: 'INSUFFICIENT_CAURIS', message: '120 Cauris requis pour révéler cet admirateur (ou Pass Babi Gold).' },
       });
     }
-    db.prepare('UPDATE swipes SET revealed = 1 WHERE id = ?').run(swipe.id);
+    await db.run('UPDATE swipes SET revealed = 1 WHERE id = ?', swipe.id);
   }
 
-  const actor = db.prepare('SELECT * FROM users WHERE id = ?').get(targetId);
-  const updatedViewer = db.prepare('SELECT cauris_balance FROM users WHERE id = ?').get(viewer.id);
+  const actor = await db.get('SELECT * FROM users WHERE id = ?', targetId);
+  const updatedViewer = await db.get('SELECT cauris_balance FROM users WHERE id = ?', viewer.id);
 
   return res.json({
     success: true,
@@ -321,6 +344,6 @@ router.post('/likes/:userId/reveal', requireAuth, (req, res) => {
       caurisBalance: Number(updatedViewer.cauris_balance),
     },
   });
-});
+}));
 
 export default router;

@@ -48,12 +48,17 @@
       </section>
 
       <div id="admin-workspace" class="hidden">
-        <div class="segmented-control" role="tablist" style="margin-bottom:1rem;">
-          <button id="tab-admin-selfies" class="seg-btn active" role="tab" aria-selected="true" type="button">
-            File Selfie 225 (<span id="admin-selfies-count">0</span>)
-          </button>
-          <button id="tab-admin-reports" class="seg-btn" role="tab" aria-selected="false" type="button">
-            Signalements (<span id="admin-reports-count">0</span>)
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem;">
+          <div class="segmented-control" role="tablist" style="margin-bottom:0;">
+            <button id="tab-admin-selfies" class="seg-btn active" role="tab" aria-selected="true" type="button">
+              File Selfie 225 (<span id="admin-selfies-count">0</span>)
+            </button>
+            <button id="tab-admin-reports" class="seg-btn" role="tab" aria-selected="false" type="button">
+              Signalements (<span id="admin-reports-count">0</span>)
+            </button>
+          </div>
+          <button id="btn-admin-purge-demo" class="btn-danger" type="button">
+            Purger les comptes démo
           </button>
         </div>
 

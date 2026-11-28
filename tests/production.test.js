@@ -4,10 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { DatabaseSync } from 'node:sqlite';
 import { WebSocket } from 'ws';
 
 const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'akwaba-prod-test-'));
+process.env.DATABASE_URL = '';
+process.env.SEED_DEMO_PROFILES = 'false';
+process.env.ALLOW_SANDBOX_SIMULATORS = 'false';
 process.env.NODE_ENV = 'production';
 process.env.JWT_SECRET = 'akwaba_production_test_jwt_secret_minimum_32_chars_225';
 process.env.ADMIN_MODERATION_SECRET = 'akwaba_prod_mod_secret_225';
@@ -21,7 +23,7 @@ process.env.GEMINI_API_KEY = '';
 process.env.RESEND_API_KEY = '';
 
 const { config } = await import('../server/config.js');
-const { setDbForTests } = await import('../server/db/database.js');
+const { SqliteDb, setDbForTests } = await import('../server/db/database.js');
 const { seedDatabase } = await import('../server/db/seed.js');
 const { createApp } = await import('../server/app.js');
 const { setupWebSocket } = await import('../server/ws/realtime.js');
@@ -45,11 +47,10 @@ async function req(method, endpoint, body = null, token = null, extraHeaders = {
 
 describe('AKWABA Production Hardening Suite', () => {
   before(async () => {
-    db = new DatabaseSync(':memory:');
-    const schema = fs.readFileSync(path.join(config.rootDir, 'server/db/schema.sql'), 'utf-8');
-    db.exec(schema);
+    db = new SqliteDb(':memory:');
+    await db.initSchema();
     setDbForTests(db);
-    seedDatabase(db);
+    await seedDatabase(db);
 
     const app = createApp();
     server = http.createServer(app);
@@ -60,13 +61,13 @@ describe('AKWABA Production Hardening Suite', () => {
 
   after(async () => {
     if (server) await new Promise((resolve) => server.close(resolve));
-    if (db) db.close();
+    if (db) await db.close();
     fs.rmSync(tempDataDir, { recursive: true, force: true });
   });
 
   it('seeds zero demo users in production, exposes public-config safely, and enforces strict HTTP headers', async () => {
-    const usersCount = db.prepare('SELECT COUNT(*) AS cnt FROM users').get().cnt;
-    const spotsCount = db.prepare('SELECT COUNT(*) AS cnt FROM safe_date_spots').get().cnt;
+    const usersCount = (await db.get('SELECT COUNT(*) AS cnt FROM users')).cnt;
+    const spotsCount = (await db.get('SELECT COUNT(*) AS cnt FROM safe_date_spots')).cnt;
     assert.equal(Number(usersCount), 0);
     assert.equal(Number(spotsCount), 3);
 

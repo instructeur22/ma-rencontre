@@ -2,7 +2,9 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
+import { getDb } from './db/database.js';
 import { createRateLimiter } from './middleware/rateLimit.js';
+import { getMediaFile } from './services/mediaStorageService.js';
 import authRoutes from './routes/auth.js';
 import profilesRoutes from './routes/profiles.js';
 import matchingRoutes from './routes/matching.js';
@@ -96,6 +98,7 @@ export function createApp() {
       data: {
         environment: config.nodeEnv,
         demoEnabled: Boolean(config.allowDemoLogin),
+        sandboxSimulators: Boolean(config.allowSandboxSimulators),
         paymentSandboxUi: Boolean(config.nodeEnv !== 'production' && config.geniusPay.useLocalSimulator),
         whatsappConfigured: Boolean(
           !config.whatsapp.useLocalSimulator && config.whatsapp.accessToken && config.whatsapp.phoneNumberId
@@ -106,11 +109,13 @@ export function createApp() {
   });
 
   app.get('/api/v1/health', (req, res) => {
+    const db = getDb();
     res.json({
       success: true,
       service: 'akwaba-api',
       version: '1.0.0',
       environment: config.nodeEnv,
+      databaseEngine: db.isPostgres ? 'postgresql' : 'sqlite',
       geniusPayMode: config.geniusPay.useLocalSimulator ? 'sandbox-simulator' : config.geniusPay.env,
       whatsappOtpMode: config.whatsapp.useLocalSimulator ? 'local-simulator' : 'meta-cloud-api',
       selfieVisionAi: config.selfieAi.geminiApiKey ? config.selfieAi.geminiModel : 'manual-moderation',
@@ -126,6 +131,20 @@ export function createApp() {
   app.use('/api/v1/safety', safetyRoutes);
   app.use('/api/v1', paymentsRoutes);
   app.use('/api/v1/dates', datesRoutes);
+
+  // Serve uploaded media from PostgreSQL/SQLite media_files first, then disk fallback
+  app.get('/uploads/:folder/:filename', async (req, res, next) => {
+    try {
+      const media = await getMediaFile(getDb(), req.path, 'public');
+      if (!media) return next();
+      res.setHeader('Content-Type', media.mimeType);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return res.send(media.buffer);
+    } catch (err) {
+      return next(err);
+    }
+  });
 
   // Serve persistent user uploads from DATA_DIR/uploads before public/ fallback
   fs.mkdirSync(config.uploadsDir, { recursive: true });

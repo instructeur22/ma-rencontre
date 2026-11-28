@@ -11,7 +11,7 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 
 const nodeEnv = process.env.NODE_ENV || 'development';
 const port = Number(process.env.PORT || 3000);
-let appBaseUrl = process.env.APP_BASE_URL || `http://localhost:${port}`;
+let appBaseUrl = process.env.APP_BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`;
 if (nodeEnv !== 'production' && explicitPort && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(appBaseUrl)) {
   appBaseUrl = `http://localhost:${port}`;
 }
@@ -46,6 +46,20 @@ if (process.env.TRUST_PROXY !== undefined && process.env.TRUST_PROXY !== '') {
   else trustProxy = process.env.TRUST_PROXY;
 }
 
+const allowDemoLogin = process.env.ALLOW_DEMO_LOGIN === 'true' || nodeEnv !== 'production';
+const seedDemoProfiles =
+  process.env.SEED_DEMO_PROFILES === 'true'
+    ? true
+    : process.env.SEED_DEMO_PROFILES === 'false'
+      ? false
+      : allowDemoLogin;
+const allowSandboxSimulators =
+  process.env.ALLOW_SANDBOX_SIMULATORS === 'true'
+    ? true
+    : process.env.ALLOW_SANDBOX_SIMULATORS === 'false'
+      ? false
+      : nodeEnv !== 'production';
+
 export const config = {
   rootDir: ROOT_DIR,
   dataDir,
@@ -55,10 +69,13 @@ export const config = {
   appBaseUrl,
   trustProxy,
   corsOrigin: process.env.CORS_ORIGIN || (nodeEnv === 'production' ? appBaseUrl : '*'),
-  allowDemoLogin: process.env.ALLOW_DEMO_LOGIN === 'true' || nodeEnv !== 'production',
+  allowDemoLogin,
+  seedDemoProfiles,
+  allowSandboxSimulators,
   jwtSecret: process.env.JWT_SECRET || 'akwaba_dev_secret_change_in_production_225',
   adminModerationSecret:
     process.env.ADMIN_MODERATION_SECRET || (nodeEnv !== 'production' ? 'akwaba_dev_mod_225' : ''),
+  databaseUrl: process.env.DATABASE_URL || '',
   dbPath,
   email: {
     resendApiKey: process.env.RESEND_API_KEY || '',

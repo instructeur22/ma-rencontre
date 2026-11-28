@@ -212,6 +212,15 @@ CREATE TABLE IF NOT EXISTS date_bookings (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS media_files (
+  path TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  mime_type TEXT NOT NULL,
+  visibility TEXT NOT NULL DEFAULT 'public',
+  data BLOB NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_swipes_actor ON swipes(actor_id);
 CREATE INDEX IF NOT EXISTS idx_swipes_target ON swipes(target_id);
 CREATE INDEX IF NOT EXISTS idx_messages_match ON messages(match_id, created_at);
@@ -220,3 +229,4 @@ CREATE INDEX IF NOT EXISTS idx_orders_ref ON payment_orders(reference);
 CREATE INDEX IF NOT EXISTS idx_phone_otp_user ON phone_otp_challenges(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_pwd_reset_user ON password_reset_challenges(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_safety_verif_status ON safety_verifications(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_media_user ON media_files(user_id);

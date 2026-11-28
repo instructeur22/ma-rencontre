@@ -439,6 +439,14 @@ paths:
       responses:
         '200':
           description: Compte purgé
+  /safety/admin/purge-demo:
+    post:
+      security:
+        - AdminSecret: []
+      summary: Purger tous les comptes démo (@akwaba.ci) avant la mise en production publique
+      responses:
+        '200':
+          description: Comptes démo et données associées purgés
   /safety/report:
     post:
       security:

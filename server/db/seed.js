@@ -65,9 +65,9 @@ export function ensureDemoAudioAssets() {
   }
 }
 
-export function seedPartnerSpots(dbParam = null) {
+export async function seedPartnerSpots(dbParam = null) {
   const db = dbParam || getDb();
-  const existingSpots = db.prepare('SELECT COUNT(*) as cnt FROM safe_date_spots').get();
+  const existingSpots = await db.get('SELECT COUNT(*) as cnt FROM safe_date_spots');
   if (existingSpots && Number(existingSpots.cnt) > 0) {
     return { spotsSeeded: false };
   }
@@ -115,35 +115,49 @@ export function seedPartnerSpots(dbParam = null) {
     },
   ];
 
-  const insertSpot = db.prepare(`
-    INSERT INTO safe_date_spots (
-      id, name, commune, category, vibe, budget_xof, ticket_price_xof,
-      image_url, perk_akwaba, next_event_title, next_event_date
-    ) VALUES (
-      @id, @name, @commune, @category, @vibe, @budget_xof, @ticket_price_xof,
-      @image_url, @perk_akwaba, @next_event_title, @next_event_date
-    )
-  `);
-
   for (const s of spots) {
-    insertSpot.run(s);
+    await db.run(
+      `INSERT INTO safe_date_spots (
+        id, name, commune, category, vibe, budget_xof, ticket_price_xof,
+        image_url, perk_akwaba, next_event_title, next_event_date
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (id) DO NOTHING`,
+      s.id,
+      s.name,
+      s.commune,
+      s.category,
+      s.vibe,
+      s.budget_xof,
+      s.ticket_price_xof,
+      s.image_url,
+      s.perk_akwaba,
+      s.next_event_title,
+      s.next_event_date
+    );
   }
   return { spotsSeeded: true, spotsCount: spots.length };
 }
 
-export function seedDatabase(dbParam = null, options = {}) {
+export async function purgeDemoData(dbParam = null) {
+  const db = dbParam || getDb();
+  await db.run("DELETE FROM media_files WHERE user_id IN (SELECT id FROM users WHERE is_demo_bot = 1 OR id = 'usr_kouame')");
+  const res = await db.run("DELETE FROM users WHERE is_demo_bot = 1 OR id = 'usr_kouame'");
+  return { purgedUsers: Number(res.changes || 0) };
+}
+
+export async function seedDatabase(dbParam = null, options = {}) {
   const db = dbParam || getDb();
   const includeDemoUsers =
-    options.includeDemoUsers !== undefined ? Boolean(options.includeDemoUsers) : Boolean(config.allowDemoLogin);
+    options.includeDemoUsers !== undefined ? Boolean(options.includeDemoUsers) : Boolean(config.seedDemoProfiles);
 
-  const spotsRes = seedPartnerSpots(db);
+  const spotsRes = await seedPartnerSpots(db);
   if (!includeDemoUsers) {
     return { seeded: false, ...spotsRes, usersCount: 0, demoSkipped: true };
   }
 
   ensureDemoAudioAssets();
 
-  const existing = db.prepare('SELECT COUNT(*) as cnt FROM users').get();
+  const existing = await db.get('SELECT COUNT(*) as cnt FROM users');
   if (existing && Number(existing.cnt) > 0) {
     return { seeded: false, ...spotsRes };
   }
@@ -586,7 +600,7 @@ export function seedDatabase(dbParam = null, options = {}) {
     },
   ];
 
-  const insertUser = db.prepare(`
+  const insertUserSql = `
     INSERT INTO users (
       id, email, phone, phone_verified, password_hash, name, age, gender, looking_for,
       commune, city, country_code, is_diaspora, passport_active, passport_target_city,
@@ -595,48 +609,99 @@ export function seedDatabase(dbParam = null, options = {}) {
       tonight_available, tonight_mood, incognito, verified_225, trust_score, cauris_balance,
       subscription_tier, referral_code, is_demo_bot
     ) VALUES (
-      @id, @email, @phone, @phone_verified, @password_hash, @name, @age, @gender, @looking_for,
-      @commune, @city, @country_code, @is_diaspora, @passport_active, @passport_target_city,
-      @passport_arrival_date, @passport_departure_date, @intention, @profession, @bio, @secret_prompt,
-      @avatar_url, @voice_note_url, @voice_duration_sec, @tags_json, @vrai_babi_json,
-      @tonight_available, @tonight_mood, 0, @verified_225, @trust_score, @cauris_balance,
-      @subscription_tier, @referral_code, @is_demo_bot
+      ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
+      ?, ?, 0, ?, ?, ?,
+      ?, ?, ?
     )
-  `);
+    ON CONFLICT (id) DO NOTHING
+  `;
 
   for (const u of users) {
-    insertUser.run({
-      ...u,
-      password_hash: demoPasswordHash,
-      passport_arrival_date: u.passport_arrival_date || '',
-      passport_departure_date: u.passport_departure_date || '',
-    });
+    await db.run(
+      insertUserSql,
+      u.id,
+      u.email,
+      u.phone,
+      u.phone_verified,
+      demoPasswordHash,
+      u.name,
+      u.age,
+      u.gender,
+      u.looking_for,
+      u.commune,
+      u.city,
+      u.country_code,
+      u.is_diaspora,
+      u.passport_active,
+      u.passport_target_city,
+      u.passport_arrival_date || '',
+      u.passport_departure_date || '',
+      u.intention,
+      u.profession,
+      u.bio,
+      u.secret_prompt,
+      u.avatar_url,
+      u.voice_note_url,
+      u.voice_duration_sec,
+      u.tags_json,
+      u.vrai_babi_json,
+      u.tonight_available,
+      u.tonight_mood,
+      u.verified_225,
+      u.trust_score,
+      u.cauris_balance,
+      u.subscription_tier,
+      u.referral_code,
+      u.is_demo_bot
+    );
   }
 
   // Initial mutual matches for Kouamé so Chat & Matchs work immediately on launch
-  db.prepare(
+  await db.run(
     `INSERT INTO matches (id, user_a, user_b, compatibility_score, is_super_match)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run('match_kouame_aya', 'usr_kouame', 'usr_aya', 94, 1);
+     VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+    'match_kouame_aya',
+    'usr_kouame',
+    'usr_aya',
+    94,
+    1
+  );
 
-  db.prepare(
+  await db.run(
     `INSERT INTO matches (id, user_a, user_b, compatibility_score, is_super_match)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run('match_kouame_grace', 'usr_kouame', 'usr_grace', 89, 0);
+     VALUES (?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+    'match_kouame_grace',
+    'usr_kouame',
+    'usr_grace',
+    89,
+    0
+  );
 
   // Incoming likes so Kouamé sees admirers waiting in "Admirateurs"
-  db.prepare(`INSERT INTO swipes (actor_id, target_id, action) VALUES (?, ?, ?)`).run('usr_aya', 'usr_kouame', 'super_like');
-  db.prepare(`INSERT INTO swipes (actor_id, target_id, action) VALUES (?, ?, ?)`).run('usr_kouame', 'usr_aya', 'like');
-  db.prepare(`INSERT INTO swipes (actor_id, target_id, action) VALUES (?, ?, ?)`).run('usr_grace', 'usr_kouame', 'like');
-  db.prepare(`INSERT INTO swipes (actor_id, target_id, action) VALUES (?, ?, ?)`).run('usr_kouame', 'usr_grace', 'like');
-  db.prepare(`INSERT INTO swipes (actor_id, target_id, action) VALUES (?, ?, ?)`).run('usr_nadia', 'usr_kouame', 'super_like');
-  db.prepare(`INSERT INTO swipes (actor_id, target_id, action) VALUES (?, ?, ?)`).run('usr_sarah', 'usr_kouame', 'like');
+  const seedSwipes = [
+    ['usr_aya', 'usr_kouame', 'super_like'],
+    ['usr_kouame', 'usr_aya', 'like'],
+    ['usr_grace', 'usr_kouame', 'like'],
+    ['usr_kouame', 'usr_grace', 'like'],
+    ['usr_nadia', 'usr_kouame', 'super_like'],
+    ['usr_sarah', 'usr_kouame', 'like'],
+  ];
+  for (const [actorId, targetId, action] of seedSwipes) {
+    await db.run(
+      'INSERT INTO swipes (actor_id, target_id, action) VALUES (?, ?, ?) ON CONFLICT (actor_id, target_id) DO NOTHING',
+      actorId,
+      targetId,
+      action
+    );
+  }
 
   // Initial messages in Salon Privé
-  db.prepare(
+  await db.run(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content)
-     VALUES (?, ?, ?, ?, 'text', ?)`
-  ).run(
+     VALUES (?, ?, ?, ?, 'text', ?) ON CONFLICT (id) DO NOTHING`,
     'msg_seed_1',
     'match_kouame_aya',
     'usr_aya',
@@ -644,10 +709,9 @@ export function seedDatabase(dbParam = null, options = {}) {
     'Akwaba Kouamé ! J’ai vu qu’on était tous les deux Team Attiéké poisson & Zouglou à Cocody. Tu connais un bon spot calme pour un café cette semaine ?'
   );
 
-  db.prepare(
+  await db.run(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content, media_url, metadata_json)
-     VALUES (?, ?, ?, ?, 'voice', ?, ?, ?)`
-  ).run(
+     VALUES (?, ?, ?, ?, 'voice', ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
     'msg_seed_2',
     'match_kouame_aya',
     'usr_aya',
@@ -657,10 +721,9 @@ export function seedDatabase(dbParam = null, options = {}) {
     JSON.stringify({ durationSec: 4 })
   );
 
-  db.prepare(
+  await db.run(
     `INSERT INTO messages (id, match_id, sender_id, recipient_id, msg_type, content)
-     VALUES (?, ?, ?, ?, 'text', ?)`
-  ).run(
+     VALUES (?, ?, ?, ?, 'text', ?) ON CONFLICT (id) DO NOTHING`,
     'msg_seed_3',
     'match_kouame_grace',
     'usr_grace',
@@ -669,10 +732,15 @@ export function seedDatabase(dbParam = null, options = {}) {
   );
 
   // Initial wallet transaction for Kouamé
-  db.prepare(
+  await db.run(
     `INSERT INTO wallet_transactions (id, user_id, tx_type, amount_cauris, reason, reference)
-     VALUES (?, ?, 'credit', ?, ?, ?)`
-  ).run('tx_seed_welcome', 'usr_kouame', 350, 'Bonus de bienvenue AKWABA + Profil Vérifié 225', 'WELCOME-225');
+     VALUES (?, ?, 'credit', ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+    'tx_seed_welcome',
+    'usr_kouame',
+    350,
+    'Bonus de bienvenue AKWABA + Profil Vérifié 225',
+    'WELCOME-225'
+  );
 
   return { seeded: true, usersCount: users.length };
 }
@@ -680,6 +748,15 @@ export function seedDatabase(dbParam = null, options = {}) {
 // Allow running directly via `npm run seed`
 const isDirectSeed = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isDirectSeed) {
-  const res = seedDatabase();
-  console.log('AKWABA seed result:', res);
+  import('./database.js')
+    .then(async ({ initDb, closeDb }) => {
+      await initDb();
+      const res = await seedDatabase();
+      console.log('AKWABA seed result:', res);
+      await closeDb();
+    })
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
 }

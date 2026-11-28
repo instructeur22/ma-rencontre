@@ -111,35 +111,43 @@ export function findCatalogItem(itemCode) {
   return null;
 }
 
-function creditCaurisDirect(db, userId, amount, reason, reference = '') {
+async function creditCaurisDirect(db, userId, amount, reason, reference = '') {
   const numeric = Math.floor(Number(amount));
   if (!Number.isFinite(numeric) || numeric <= 0) return null;
   const txId = `tx_${crypto.randomUUID().slice(0, 12)}`;
-  db.prepare('UPDATE users SET cauris_balance = cauris_balance + ? WHERE id = ?').run(numeric, userId);
-  db.prepare(
+  await db.run('UPDATE users SET cauris_balance = cauris_balance + ? WHERE id = ?', numeric, userId);
+  await db.run(
     `INSERT INTO wallet_transactions (id, user_id, tx_type, amount_cauris, reason, reference)
-     VALUES (?, ?, 'credit', ?, ?, ?)`
-  ).run(txId, userId, numeric, reason, reference);
-  const row = db.prepare('SELECT cauris_balance FROM users WHERE id = ?').get(userId);
+     VALUES (?, ?, 'credit', ?, ?, ?)`,
+    txId,
+    userId,
+    numeric,
+    reason,
+    reference
+  );
+  const row = await db.get('SELECT cauris_balance FROM users WHERE id = ?', userId);
   return row ? Number(row.cauris_balance) : 0;
 }
 
-export function creditCauris(db, userId, amount, reason, reference = '') {
-  return runInTransaction(db, () => creditCaurisDirect(db, userId, amount, reason, reference));
+export async function creditCauris(db, userId, amount, reason, reference = '') {
+  return runInTransaction(db, (tx) => creditCaurisDirect(tx, userId, amount, reason, reference));
 }
 
-export function spendCauris(db, userId, amount, reason, reference = '') {
+export async function spendCauris(db, userId, amount, reason, reference = '') {
   const numeric = Math.floor(Number(amount));
   if (!Number.isFinite(numeric) || numeric <= 0) {
     return { ok: false, error: 'Montant invalide', balance: 0 };
   }
-  return runInTransaction(db, () => {
-    const upd = db
-      .prepare('UPDATE users SET cauris_balance = cauris_balance - ? WHERE id = ? AND cauris_balance >= ?')
-      .run(numeric, userId, numeric);
+  return runInTransaction(db, async (tx) => {
+    const upd = await tx.run(
+      'UPDATE users SET cauris_balance = cauris_balance - ? WHERE id = ? AND cauris_balance >= ?',
+      numeric,
+      userId,
+      numeric
+    );
 
     if (!upd.changes) {
-      const user = db.prepare('SELECT cauris_balance FROM users WHERE id = ?').get(userId);
+      const user = await tx.get('SELECT cauris_balance FROM users WHERE id = ?', userId);
       return {
         ok: false,
         error: 'Solde de Cauris insuffisant',
@@ -148,19 +156,27 @@ export function spendCauris(db, userId, amount, reason, reference = '') {
     }
 
     const txId = `tx_${crypto.randomUUID().slice(0, 12)}`;
-    db.prepare(
+    await tx.run(
       `INSERT INTO wallet_transactions (id, user_id, tx_type, amount_cauris, reason, reference)
-       VALUES (?, ?, 'debit', ?, ?, ?)`
-    ).run(txId, userId, numeric, reason, reference);
-    const updated = db.prepare('SELECT cauris_balance FROM users WHERE id = ?').get(userId);
+       VALUES (?, ?, 'debit', ?, ?, ?)`,
+      txId,
+      userId,
+      numeric,
+      reason,
+      reference
+    );
+    const updated = await tx.get('SELECT cauris_balance FROM users WHERE id = ?', userId);
     return { ok: true, balance: Number(updated.cauris_balance), txId };
   });
 }
 
-export function claimDailyCheckin(db, userId) {
-  return runInTransaction(db, () => {
+export async function claimDailyCheckin(db, userId) {
+  return runInTransaction(db, async (tx) => {
     const today = new Date().toISOString().slice(0, 10);
-    const user = db.prepare('SELECT last_checkin_date, checkin_streak, cauris_balance FROM users WHERE id = ?').get(userId);
+    const user = await tx.get(
+      'SELECT last_checkin_date, checkin_streak, cauris_balance FROM users WHERE id = ?',
+      userId
+    );
     if (!user) return { ok: false, error: 'Utilisateur introuvable' };
     if (user.last_checkin_date === today) {
       return {
@@ -176,8 +192,19 @@ export function claimDailyCheckin(db, userId) {
     const nextStreak = user.last_checkin_date === yesterday ? Number(user.checkin_streak) + 1 : 1;
     const reward = Math.min(40, 15 + (nextStreak - 1) * 5);
 
-    db.prepare('UPDATE users SET last_checkin_date = ?, checkin_streak = ? WHERE id = ?').run(today, nextStreak, userId);
-    const newBalance = creditCaurisDirect(db, userId, reward, `Série quotidienne (Jour ${nextStreak})`, `STREAK-${today}`);
+    await tx.run(
+      'UPDATE users SET last_checkin_date = ?, checkin_streak = ? WHERE id = ?',
+      today,
+      nextStreak,
+      userId
+    );
+    const newBalance = await creditCaurisDirect(
+      tx,
+      userId,
+      reward,
+      `Série quotidienne (Jour ${nextStreak})`,
+      `STREAK-${today}`
+    );
 
     return {
       ok: true,
@@ -189,9 +216,9 @@ export function claimDailyCheckin(db, userId) {
   });
 }
 
-export function fulfillPaymentOrder(db, reference, details = {}) {
-  return runInTransaction(db, () => {
-    const order = db.prepare('SELECT * FROM payment_orders WHERE reference = ?').get(reference);
+export async function fulfillPaymentOrder(db, reference, details = {}) {
+  return runInTransaction(db, async (tx) => {
+    const order = await tx.get('SELECT * FROM payment_orders WHERE reference = ?', reference);
     if (!order) return { ok: false, error: 'Commande introuvable' };
 
     if (order.fulfilled) {
@@ -205,18 +232,22 @@ export function fulfillPaymentOrder(db, reference, details = {}) {
     const nowIso = new Date().toISOString();
     const method = details.payment_method || order.payment_method || 'wave';
     const fees = details.fees !== undefined ? Number(details.fees) : Number(order.fees_xof || 0);
-    const netAmount = details.net_amount !== undefined ? Number(details.net_amount) : Math.max(0, Number(order.amount_xof) - fees);
+    const netAmount =
+      details.net_amount !== undefined ? Number(details.net_amount) : Math.max(0, Number(order.amount_xof) - fees);
 
-    const claim = db
-      .prepare(
-        `UPDATE payment_orders
-         SET status = 'completed', payment_method = ?, fees_xof = ?, net_amount_xof = ?, fulfilled = 1, completed_at = ?
-         WHERE reference = ? AND fulfilled = 0`
-      )
-      .run(method, fees, netAmount, nowIso, reference);
+    const claim = await tx.run(
+      `UPDATE payment_orders
+       SET status = 'completed', payment_method = ?, fees_xof = ?, net_amount_xof = ?, fulfilled = 1, completed_at = ?
+       WHERE reference = ? AND fulfilled = 0`,
+      method,
+      fees,
+      netAmount,
+      nowIso,
+      reference
+    );
 
     if (!claim.changes) {
-      const current = db.prepare('SELECT * FROM payment_orders WHERE reference = ?').get(reference);
+      const current = await tx.get('SELECT * FROM payment_orders WHERE reference = ?', reference);
       return { ok: true, alreadyFulfilled: true, order: { ...current } };
     }
 
@@ -224,39 +255,43 @@ export function fulfillPaymentOrder(db, reference, details = {}) {
     if (order.item_type === 'subscription') {
       const sub = STORE_CATALOG.subscriptions.find((s) => s.code === order.item_code);
       if (sub) {
-        const currentUser = db.prepare('SELECT subscription_expires_at FROM users WHERE id = ?').get(order.user_id);
+        const currentUser = await tx.get(
+          'SELECT subscription_expires_at FROM users WHERE id = ?',
+          order.user_id
+        );
         const existingExp = currentUser?.subscription_expires_at ? Date.parse(currentUser.subscription_expires_at) : 0;
         const baseTime = Number.isFinite(existingExp) && existingExp > Date.now() ? existingExp : Date.now();
         const expiresAt = new Date(baseTime + sub.durationDays * 86400000).toISOString();
 
-        db.prepare('UPDATE users SET subscription_tier = ?, subscription_expires_at = ? WHERE id = ?').run(
+        await tx.run(
+          'UPDATE users SET subscription_tier = ?, subscription_expires_at = ? WHERE id = ?',
           sub.code,
           expiresAt,
           order.user_id
         );
         if (sub.caurisBonus > 0) {
-          creditCaurisDirect(db, order.user_id, sub.caurisBonus, `Bonus ${sub.name}`, reference);
+          await creditCaurisDirect(tx, order.user_id, sub.caurisBonus, `Bonus ${sub.name}`, reference);
         }
         if (sub.code === 'diaspora_vip') {
-          db.prepare('UPDATE users SET passport_active = 1 WHERE id = ?').run(order.user_id);
+          await tx.run('UPDATE users SET passport_active = 1 WHERE id = ?', order.user_id);
         }
         grantedSummary = `${sub.name} activé + ${sub.caurisBonus} Cauris`;
       }
     } else if (order.item_type === 'cauris_pack') {
       const pack = STORE_CATALOG.caurisPacks.find((p) => p.code === order.item_code);
       if (pack) {
-        creditCaurisDirect(db, order.user_id, pack.caurisAmount, `Achat ${pack.name} via GeniusPay`, reference);
+        await creditCaurisDirect(tx, order.user_id, pack.caurisAmount, `Achat ${pack.name} via GeniusPay`, reference);
         grantedSummary = `+${pack.caurisAmount} Cauris crédités`;
       }
     } else if (order.item_type === 'event_ticket') {
       const meta = parseJsonSafe(order.metadata_json, {});
       if (meta.booking_id) {
-        db.prepare("UPDATE date_bookings SET status = 'confirmed' WHERE id = ?").run(meta.booking_id);
+        await tx.run("UPDATE date_bookings SET status = 'confirmed' WHERE id = ?", meta.booking_id);
       }
       grantedSummary = `Réservation Safe Date confirmée (${reference})`;
     }
 
-    const updatedOrder = db.prepare('SELECT * FROM payment_orders WHERE reference = ?').get(reference);
+    const updatedOrder = await tx.get('SELECT * FROM payment_orders WHERE reference = ?', reference);
     return {
       ok: true,
       alreadyFulfilled: false,
